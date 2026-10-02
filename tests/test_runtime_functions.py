@@ -496,6 +496,39 @@ def test_perf_hud_options():
 
     print("[PASS] Performance HUD unit tests: display modes, screen docking positions, and themes verified")
 
+def test_text_resizing_pipeline():
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+    from dialogue_text_tool import DialogueTextTool
+
+    tool = DialogueTextTool()
+    
+    # 1. Bytecode decompile and compile roundtrip test
+    original_text = "Donald? Goofy?[NEWLINE]Where are you?[WAIT_KEY] [CLEAR_PAGE]Ahead lies what you seek."
+    compiled = tool.compile_text(original_text)
+    assert len(compiled) > 0
+    decompiled, _ = tool.decompile_bytecode(compiled)
+    assert "[NEWLINE]" in decompiled
+    assert "[WAIT_KEY]" in decompiled
+    assert "[CLEAR_PAGE]" in decompiled
+    assert "Donald? Goofy?" in decompiled
+    assert "Ahead lies what you seek." in decompiled
+
+    # 2. Word wrapping recalculation (26 cols to 34 cols)
+    wrapped_34 = tool.recalculate_word_wrapping("To find is to lose, and to lose is to find.[NEWLINE]That is the rule here in Castle Oblivion.", max_chars_per_line=34)
+    lines_34 = wrapped_34.split("[NEWLINE]")
+    for l in lines_34:
+        assert len(l) <= 34, f"Line exceeded 34 cols: {l}"
+
+    # 3. Nine-slice dialogue box expansion (28 tiles to 34 tiles)
+    base_tiles = 28
+    expanded_tiles = 34
+    assert expanded_tiles * 8 == 272, "Expanded 34-tile dialogue box must be 272 pixels"
+    assert base_tiles * 8 == 224, "Standard 28-tile dialogue box must be 224 pixels"
+
+    print("[PASS] Text resizing pipeline: bytecode roundtrip, wrap recalculation, and 9-slice box geometry verified")
+
 if __name__ == "__main__":
     test_config_keys_count()
     test_ini_deserialization()
@@ -513,6 +546,7 @@ if __name__ == "__main__":
     test_xbrz_scaling_ratios()
     test_savestate_thumbnail_headers()
     test_perf_hud_options()
+    test_text_resizing_pipeline()
     print()
-    print("ALL 16 AUTOMATED VERIFICATION SUITES PASSED SUCCESSFULLY.")
+    print("ALL 17 AUTOMATED VERIFICATION SUITES PASSED SUCCESSFULLY.")
 

@@ -9,6 +9,8 @@
 #include "perf_hud.h"
 #include "dialogue_enhancer.h"
 #include "dialogue_backlog.h"
+#include "font_resizer.h"
+#include "dialogue_box_scaler.h"
 #include "widescreen_adapter.h"
 
 #include <iostream>
@@ -288,6 +290,85 @@ static void test_dialogue_components() {
     std::cout << "[PASS] C++ DialogueEnhancer and DialogueBacklog unit tests passed" << std::endl;
 }
 
+static void test_font_resizer() {
+    auto& fr = FontResizer::instance();
+
+    fr.set_font_scale(FontScale::Original100);
+    assert(fr.get_glyph_width() == 8);
+    assert(fr.get_glyph_height() == 12);
+    assert(fr.settings().line_spacing == 16);
+
+    fr.set_font_scale(FontScale::Medium85);
+    assert(fr.get_glyph_width() == 7);
+    assert(fr.get_glyph_height() == 10);
+    assert(fr.settings().line_spacing == 13);
+
+    fr.set_font_scale(FontScale::Compact70);
+    assert(fr.get_glyph_width() == 6);
+    assert(fr.get_glyph_height() == 8);
+    assert(fr.settings().line_spacing == 10);
+
+    fr.set_font_scale(FontScale::Micro55);
+    assert(fr.get_glyph_width() == 5);
+    assert(fr.get_glyph_height() == 7);
+    assert(fr.settings().line_spacing == 8);
+
+    // Test proportional advance widths
+    int w_space = fr.get_char_advance_width(' ');
+    int w_m = fr.get_char_advance_width('m');
+    assert(w_m >= w_space);
+
+    // Test 4bpp tile downsampling
+    uint8_t src_1bpp[12] = { 0x3C, 0x42, 0x81, 0x81, 0xFF, 0x81, 0x81, 0x81, 0x81, 0x00, 0x00, 0x00 };
+    uint8_t dst_4bpp[32];
+    fr.render_scaled_glyph_4bpp(src_1bpp, dst_4bpp, 2);
+    bool has_pixels = false;
+    for (int i = 0; i < 32; ++i) {
+        if (dst_4bpp[i] != 0) has_pixels = true;
+    }
+    assert(has_pixels);
+
+    std::cout << "[PASS] C++ FontResizer unit test passed" << std::endl;
+}
+
+static void test_dialogue_box_scaler() {
+    auto& dbs = DialogueBoxScaler::instance();
+
+    dbs.set_width_mode(BoxWidthMode::Standard240);
+    assert(dbs.get_box_width_tiles() == 28);
+    assert(dbs.get_box_width_pixels() == 224);
+
+    dbs.set_width_mode(BoxWidthMode::WidescreenExpanded);
+    assert(dbs.get_box_width_tiles() == 34);
+    assert(dbs.get_box_width_pixels() == 272);
+
+    dbs.set_width_mode(BoxWidthMode::DynamicResponsive);
+    assert(dbs.get_box_width_tiles() == 36);
+    assert(dbs.get_box_width_pixels() == 288);
+
+    // Test nine-slice tilemap row horizontal stretching
+    uint16_t row[40];
+    row[0] = 0x0100; // Left cap
+    row[1] = 0x0101; // Center repeating tile
+    row[27] = 0x0102; // Right cap
+    dbs.expand_dialogue_tilemap_row(row, 28, 34);
+    assert(row[0] == 0x0100);
+    for (int i = 1; i < 33; ++i) {
+        assert(row[i] == 0x0101);
+    }
+    assert(row[33] == 0x0102);
+
+    // Test dialogue OAM adjustment
+    uint16_t a0 = 120; // lower third dialogue region
+    uint16_t a1 = 200; // right border corner
+    dbs.adjust_dialogue_oam(a0, a1, 284);
+    int shifted_x = a1 & 0x01FF;
+    if (shifted_x >= 256) shifted_x -= 512;
+    assert(shifted_x > 200); // Shifted right for expanded box
+
+    std::cout << "[PASS] C++ DialogueBoxScaler unit test passed" << std::endl;
+}
+
 int main() {
     std::cout << "================================================================" << std::endl;
     std::cout << "           KHCOMRecomp Native C++ Unit Test Runner             " << std::endl;
@@ -303,9 +384,11 @@ int main() {
     test_savestate_thumbnails();
     test_perf_hud();
     test_dialogue_components();
+    test_font_resizer();
+    test_dialogue_box_scaler();
 
     std::cout << "================================================================" << std::endl;
-    std::cout << "ALL NATIVE C++ UNIT TESTS PASSED SUCCESSFULLY (10/10 MODULES)." << std::endl;
+    std::cout << "ALL NATIVE C++ UNIT TESTS PASSED SUCCESSFULLY (12/12 MODULES)." << std::endl;
     std::cout << "================================================================" << std::endl;
     return 0;
 }

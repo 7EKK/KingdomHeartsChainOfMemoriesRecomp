@@ -1,5 +1,7 @@
 #include "dialogue_enhancer.h"
 #include "dialogue_backlog.h"
+#include "font_resizer.h"
+#include "dialogue_box_scaler.h"
 #include <cctype>
 #include <sstream>
 
@@ -15,12 +17,18 @@ void DialogueEnhancer::set_density(FontDensity density) {
     switch (density) {
         case FontDensity::Original:
             settings_.max_line_width_chars = 26;
+            FontResizer::instance().set_font_scale(FontScale::Original100);
+            DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::Standard240);
             break;
         case FontDensity::Compact:
             settings_.max_line_width_chars = 34;
+            FontResizer::instance().set_font_scale(FontScale::Compact70);
+            DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::WidescreenExpanded);
             break;
         case FontDensity::HighDensity:
             settings_.max_line_width_chars = 42;
+            FontResizer::instance().set_font_scale(FontScale::Micro55);
+            DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::DynamicResponsive);
             break;
     }
 }

@@ -71,6 +71,8 @@ set(KHCOM_RUNTIME_SOURCES
     src/hud_anchoring.cpp
     src/dialogue_enhancer.cpp
     src/dialogue_backlog.cpp
+    src/font_resizer.cpp
+    src/dialogue_box_scaler.cpp
     src/ram_overlay_dispatch.cpp
     src/widescreen_adapter.cpp
 )
@@ -171,6 +173,8 @@ add_executable(khcom_unit_tests
     src/hud_anchoring.cpp
     src/dialogue_enhancer.cpp
     src/dialogue_backlog.cpp
+    src/font_resizer.cpp
+    src/dialogue_box_scaler.cpp
     src/widescreen_adapter.cpp
     src/ram_overlay_dispatch.cpp
     src/scaffold_stub.cpp
