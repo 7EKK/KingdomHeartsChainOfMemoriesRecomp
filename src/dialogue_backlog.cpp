@@ -228,6 +228,7 @@ void DialogueBacklog::draw_text(SDL_Renderer* renderer, int x, int y, const char
 
 bool DialogueBacklog::handle_event(const SDL_Event& event) {
     if (!enabled_) return false;
+    if (event.type == SDL_QUIT || event.type == SDL_APP_TERMINATING) return false;
 
     if (event.type == SDL_KEYDOWN) {
         if (event.key.keysym.sym == SDLK_l || event.key.keysym.sym == SDLK_F2) {
@@ -257,6 +258,8 @@ bool DialogueBacklog::handle_event(const SDL_Event& event) {
             }
             return true; // Swallow input while reading backlog
         }
+    } else if (event.type == SDL_KEYUP && is_open_) {
+        return true;
     } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
         if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
             toggle_open();
@@ -273,6 +276,19 @@ bool DialogueBacklog::handle_event(const SDL_Event& event) {
             }
             if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
                 scroll_offset_ = std::min(max_scroll_, scroll_offset_ + 36);
+                return true;
+            }
+            return true;
+        }
+    } else if (event.type == SDL_JOYBUTTONDOWN) {
+        // Fallback for direct joystick controllers: button 4/6/8 is commonly Select/Back
+        if (event.jbutton.button == 4 || event.jbutton.button == 6 || event.jbutton.button == 8) {
+            toggle_open();
+            return true;
+        }
+        if (is_open_) {
+            if (event.jbutton.button == 1) { // B / Circle
+                set_open(false);
                 return true;
             }
             return true;

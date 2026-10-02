@@ -238,6 +238,15 @@ const RecompRuntimeUiItem kExtraItems[] = {
         nullptr, 0, nullptr
     },
     {
+        "dialogue.open_backlog",
+        "Dialogue & Story",
+        "Open Conversation Log",
+        "View story transcript and dialogue history sidebar",
+        RECOMP_RUNTIME_UI_ACTION,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
         "audio.hd_enabled",
         "Audio",
         "HD Re:CoM Soundtrack",
@@ -434,6 +443,22 @@ int ui_get_callback(const char* key, int* value_out) {
         return 1;
     }
     return 0;
+}
+
+static int ui_action_callback(const char* key) {
+    if (key && std::strcmp(key, "dialogue.open_backlog") == 0) {
+        DialogueBacklog::instance().set_open(true);
+        return 1;
+    }
+    return 0;
+}
+
+static int ui_enabled_callback(const char* key) {
+    if (!key) return 1;
+    if (std::strcmp(key, "system.resume") == 0) {
+        return 0;
+    }
+    return 1;
 }
 
 static bool s_is_loading_config = false;
@@ -659,6 +684,8 @@ gbarecomp::RunOptions create_run_options() {
     opts.launcher_aspect_labels = kAspectLabels;
     opts.launcher_aspect_view_widths = kAspectWidths;
     opts.launcher_num_aspects = sizeof(kAspectWidths) / sizeof(kAspectWidths[0]);
+    opts.launcher_expose_sharp_filter = true;
+    opts.launcher_default_sharp_filter = true;
     opts.extended_view_init = &khcom_install_widescreen_adapter;
 
 #if defined(GBARECOMP_RUNTIME_UI)
@@ -666,6 +693,8 @@ gbarecomp::RunOptions create_run_options() {
     opts.ui_extra_item_count = sizeof(kExtraItems) / sizeof(kExtraItems[0]);
     opts.ui_get = ui_get_callback;
     opts.ui_set = ui_set_callback;
+    opts.ui_action = ui_action_callback;
+    opts.ui_enabled = ui_enabled_callback;
 
     // Restore saved user configurations across game sessions
     load_khcom_config();
@@ -675,3 +704,15 @@ gbarecomp::RunOptions create_run_options() {
 }
 
 } // namespace khcom
+
+#if defined(GBARECOMP_RUNTIME_UI) && (defined(__GNUC__) || defined(__clang__))
+extern "C" {
+RecompRuntimeUi* __real_recomp_runtime_ui_create_standard(const RecompRuntimeUiStandardConfig* standard);
+RecompRuntimeUi* __wrap_recomp_runtime_ui_create_standard(const RecompRuntimeUiStandardConfig* standard) {
+    if (!standard) return nullptr;
+    RecompRuntimeUiStandardConfig cfg = *standard;
+    cfg.features &= ~static_cast<uint64_t>(RECOMP_RUNTIME_UI_STANDARD_RESUME);
+    return __real_recomp_runtime_ui_create_standard(&cfg);
+}
+}
+#endif

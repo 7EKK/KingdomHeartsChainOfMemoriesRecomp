@@ -12,6 +12,8 @@ recomp_cache/
 *.dll
 *.so
 *.dylib
+KHCOMRecomp
+*.ini
 overlay_toolchain/
 out.txt
 bios.cfg

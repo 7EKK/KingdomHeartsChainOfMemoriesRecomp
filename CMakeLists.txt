@@ -135,6 +135,17 @@ endif()
 if(UNIX AND NOT APPLE)
     target_link_libraries(KHCOMRecomp PRIVATE pthread dl m)
 endif()
+
+if(NOT MSVC)
+    target_link_options(KHCOMRecomp PRIVATE
+        "-Wl,--wrap=SDL_PollEvent"
+        "-Wl,--wrap=SDL_RenderPresent"
+        "-Wl,--wrap=SDL_UpdateTexture"
+        "-Wl,--wrap=SDL_RenderCopy"
+        "-Wl,--wrap=SDL_QueueAudio"
+        "-Wl,--wrap=recomp_runtime_ui_create_standard"
+    )
+endif()
 set_target_properties(KHCOMRecomp PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sdl2/lib/x64/SDL2.dll")
@@ -144,3 +155,53 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sdl2/lib/x64/SDL2.dll")
         $<TARGET_FILE_DIR:KHCOMRecomp>
     )
 endif()
+
+# Native C++ Unit Test Runner Target
+add_executable(khcom_unit_tests
+    tests/test_all_modules.cpp
+    src/audio_dsp.cpp
+    src/perf_hud.cpp
+    src/frame_interpolator.cpp
+    src/screen_filters.cpp
+    src/input_enhancements.cpp
+    src/hd_audio_player.cpp
+    src/savestate_thumbnails.cpp
+    src/xbrz_filter.cpp
+    src/dialog_turbo.cpp
+    src/hud_anchoring.cpp
+    src/dialogue_enhancer.cpp
+    src/dialogue_backlog.cpp
+    src/widescreen_adapter.cpp
+    src/ram_overlay_dispatch.cpp
+    src/scaffold_stub.cpp
+)
+target_include_directories(khcom_unit_tests PRIVATE
+    src
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated"
+    "${GBARECOMP_ROOT}/src"
+    "${GBARECOMP_ROOT}/src/runtime"
+    "${GBARECOMP_ROOT}/src/gba"
+    "${SDL2_INCLUDE_DIR}"
+)
+if(COMMAND recomp_target_launcher_ui)
+    recomp_target_launcher_ui(khcom_unit_tests CONSOLE gba)
+endif()
+if(COMMAND target_link_gbarecomp_runtime_stack)
+    target_link_gbarecomp_runtime_stack(khcom_unit_tests)
+else()
+    target_link_libraries(khcom_unit_tests PRIVATE
+        gbarecomp_armv4t gbarecomp_gba gbarecomp_runtime gbarecomp_debug)
+endif()
+if(UNIX AND NOT APPLE)
+    target_link_libraries(khcom_unit_tests PRIVATE pthread dl m)
+endif()
+if(NOT MSVC)
+    target_link_options(khcom_unit_tests PRIVATE
+        "-Wl,--wrap=SDL_PollEvent"
+        "-Wl,--wrap=SDL_RenderPresent"
+        "-Wl,--wrap=SDL_UpdateTexture"
+        "-Wl,--wrap=SDL_RenderCopy"
+        "-Wl,--wrap=SDL_QueueAudio"
+    )
+endif()
+set_target_properties(khcom_unit_tests PROPERTIES CXX_SCAN_FOR_MODULES OFF)

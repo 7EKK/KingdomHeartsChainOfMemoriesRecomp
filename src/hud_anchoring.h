@@ -10,7 +10,7 @@ enum class HudAnchorMode : int {
 };
 
 struct HudAnchorSettings {
-    HudAnchorMode mode = HudAnchorMode::WidescreenAnchored;
+    HudAnchorMode mode = HudAnchorMode::OriginalCentered;
     int horizontal_offset = 32;
     int vertical_offset = 0;
 };

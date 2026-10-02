@@ -478,17 +478,50 @@ void PerfHud::on_frame_present(SDL_Renderer* renderer) {
 
 extern "C" {
 
+int khcom_poll_event_intercept(SDL_Event* event);
+int khcom_update_texture_intercept(SDL_Texture* texture, const SDL_Rect* rect, const void* pixels, int pitch);
+int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, const SDL_Rect* srcrect, const SDL_Rect* dstrect);
+void khcom_render_present_intercept(SDL_Renderer* renderer);
+
+#if defined(__GNUC__) || defined(__clang__)
+int __real_SDL_PollEvent(SDL_Event* event);
+int __real_SDL_UpdateTexture(SDL_Texture* texture, const SDL_Rect* rect, const void* pixels, int pitch);
+int __real_SDL_RenderCopy(SDL_Renderer* renderer, SDL_Texture* texture, const SDL_Rect* srcrect, const SDL_Rect* dstrect);
+void __real_SDL_RenderPresent(SDL_Renderer* renderer);
+
+int __wrap_SDL_PollEvent(SDL_Event* event) {
+    return khcom_poll_event_intercept(event);
+}
+
+int __wrap_SDL_UpdateTexture(SDL_Texture* texture, const SDL_Rect* rect, const void* pixels, int pitch) {
+    return khcom_update_texture_intercept(texture, rect, pixels, pitch);
+}
+
+int __wrap_SDL_RenderCopy(SDL_Renderer* renderer, SDL_Texture* texture, const SDL_Rect* srcrect, const SDL_Rect* dstrect) {
+    return khcom_render_copy_intercept(renderer, texture, srcrect, dstrect);
+}
+
+void __wrap_SDL_RenderPresent(SDL_Renderer* renderer) {
+    khcom_render_present_intercept(renderer);
+}
+#else
 void SDL_RenderPresent(SDL_Renderer* renderer);
 int SDL_PollEvent(SDL_Event* event);
 int SDL_UpdateTexture(SDL_Texture* texture, const SDL_Rect* rect, const void* pixels, int pitch);
 int SDL_RenderCopy(SDL_Renderer* renderer, SDL_Texture* texture, const SDL_Rect* srcrect, const SDL_Rect* dstrect);
+#endif
+
 extern "C" void khcom_update_widescreen_state();
 
 int khcom_poll_event_intercept(SDL_Event* event) {
     khcom_update_widescreen_state();
     khcom_install_ram_dispatch();
     while (true) {
+#if defined(__GNUC__) || defined(__clang__)
+        int res = __real_SDL_PollEvent(event);
+#else
         int res = (SDL_PollEvent)(event);
+#endif
         if (!res) {
             return 0;
         }
@@ -501,7 +534,11 @@ int khcom_poll_event_intercept(SDL_Event* event) {
 
 int khcom_update_texture_intercept(SDL_Texture* texture, const SDL_Rect* rect, const void* pixels, int pitch) {
     if (!texture || !pixels) {
+#if defined(__GNUC__) || defined(__clang__)
+        return __real_SDL_UpdateTexture(texture, rect, pixels, pitch);
+#else
         return (SDL_UpdateTexture)(texture, rect, pixels, pitch);
+#endif
     }
 
     uint32_t format = 0;
@@ -522,12 +559,20 @@ int khcom_update_texture_intercept(SDL_Texture* texture, const SDL_Rect* rect, c
         }
     }
 
+#if defined(__GNUC__) || defined(__clang__)
+    return __real_SDL_UpdateTexture(texture, rect, pixels, pitch);
+#else
     return (SDL_UpdateTexture)(texture, rect, pixels, pitch);
+#endif
 }
 
 int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, const SDL_Rect* srcrect, const SDL_Rect* dstrect) {
     if (!renderer || !texture) {
+#if defined(__GNUC__) || defined(__clang__)
+        return __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+#else
         return (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
+#endif
     }
 
     uint32_t format = 0;
@@ -542,7 +587,11 @@ int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, co
             if (lw > 0 && lh > 0) {
                 SDL_RenderSetLogicalSize(renderer, 0, 0);
             }
+#if defined(__GNUC__) || defined(__clang__)
+            int res = __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+#else
             int res = (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
+#endif
             khcom::ScreenFilters::instance().render_mask(renderer, dstrect, tex_w, tex_h);
             return res;
         } else {
@@ -550,7 +599,11 @@ int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, co
                 if (lw != 240 || lh != 160) {
                     SDL_RenderSetLogicalSize(renderer, 240, 160);
                 }
+#if defined(__GNUC__) || defined(__clang__)
+                int res = __real_SDL_RenderCopy(renderer, texture, srcrect, nullptr);
+#else
                 int res = (SDL_RenderCopy)(renderer, texture, srcrect, nullptr);
+#endif
                 SDL_Rect vp{};
                 SDL_RenderGetViewport(renderer, &vp);
                 khcom::ScreenFilters::instance().render_mask(renderer, &vp, 240, 160);
@@ -561,14 +614,22 @@ int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, co
                 int dw = static_cast<int>(tex_w * s);
                 int dh = static_cast<int>(tex_h * s);
                 SDL_Rect centered_dst = { (out_w - dw) / 2, (out_h - dh) / 2, dw, dh };
+#if defined(__GNUC__) || defined(__clang__)
+                int res = __real_SDL_RenderCopy(renderer, texture, srcrect, &centered_dst);
+#else
                 int res = (SDL_RenderCopy)(renderer, texture, srcrect, &centered_dst);
+#endif
                 khcom::ScreenFilters::instance().render_mask(renderer, &centered_dst, tex_w, tex_h);
                 return res;
             }
         }
     }
 
+#if defined(__GNUC__) || defined(__clang__)
+    return __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+#else
     return (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
+#endif
 }
 
 void khcom_render_present_intercept(SDL_Renderer* renderer) {
@@ -585,7 +646,11 @@ void khcom_render_present_intercept(SDL_Renderer* renderer) {
         SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
         khcom::DialogueBacklog::instance().render_sidebar(renderer, win_w, win_h);
 
+#if defined(__GNUC__) || defined(__clang__)
+        __real_SDL_RenderPresent(renderer);
+#else
         (SDL_RenderPresent)(renderer);
+#endif
     }
 }
 }

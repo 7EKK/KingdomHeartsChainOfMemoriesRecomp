@@ -79,7 +79,7 @@ All adjustments made in the overlay take effect immediately in real time and are
 
 ### 5. HD Orchestrated Soundtrack & Independent Mixer
 - Replaces compressed GBA chiptune tracks with high-fidelity orchestral arrangements from PlayStation 2 *Re:Chain of Memories*.
-- Configurable track mapping via [config/music_tracks.ini](file:///c:/Users/RafaelInostroza/Desktop/KHCOMR/config/music_tracks.ini).
+- Configurable track mapping via [config/music_tracks.ini](config/music_tracks.ini).
 - Seamless loop playback and automatic resampling to engine 65,536 Hz 16-bit stereo.
 - **Independent Volume Controls:** Separate sliders for BGM (Music) and SFX (Effects / Combat Audio) from 0% to 150%.
 
@@ -95,12 +95,15 @@ All adjustments made in the overlay take effect immediately in real time and are
 - **Smooth Navigation:** Scroll up and down using the mouse wheel, keyboard arrow keys, or gamepad D-Pad.
 - **Closing:** Press `Escape`, `L`, or Gamepad `B` / `Circle` to resume gameplay.
 
-### 8. Adaptive Widescreen Architecture & HUD Anchoring
-- **Minish Cap Adaptive Widescreen Model:** Directly interfaces with the GBA PPU rasterizer to eliminate the 256px tilemap wrap duplication:
-  - `khcom_tilemap_provider`: Suppresses out-of-bounds wrapped tilemap entries (`kWsTilemapUnavailable`), preventing background scenery from repeating across the margins.
-  - `khcom_bg_x_provider`: Handles regular BG presentation per layer. Suppresses dialogue boxes on BG0 in margins so text windows remain centered over the 240px native play area without bleeding, anchors BG1 HUD backgrounds, and smoothly clamps BG2/BG3 arena scenery to edge columns (0 and 239).
-  - `khcom_obj_attr_x_provider`: Hooks OAM sprite attributes in real time. Shifts Sora's HP bar and boss gauges to the top-left margin (`X -= extra_left`), shifts the Card Deck and reload counter to the bottom-right margin (`X += extra_right`), and unwraps 9-bit signed sprite coordinates so off-screen entities do not pop into opposite margins.
-  - **Dynamic Pillarbox Management:** Automatically clears pillarbox black bars during active gameplay and battles in widescreen mode, while preserving authentic borders during menus or 3:2 classic play.
+### 8. Adaptive Widescreen Architecture & Dynamic Pillarboxing (Battle 16:9 / Overworld 3:2)
+- **Event-Driven Aspect Presentation (Combat 16:9 / Non-Combat 3:2):**
+  - **16:9 True Widescreen during Battles:** Combat arenas expand across modern 16:9 and 16:10 viewports without stretching or edge distortion. Background scenery layers (`BG2` and `BG3`) seamlessly render into the extended horizontal field of view, revealing the full arena width.
+  - **Authentic 3:2 Pillarbox for Overworld, Menus & Cinematics:** Outside of battles—during room exploration, door synthesis, menu navigation (Deck Edit, Status, Jiminy's Journal), title screen, and story cutscenes—the game automatically displays the native 240×160 GBA presentation surrounded by clean, undistorted pillarbox black bars, preventing edge glitches or out-of-bounds tile repetition.
+  - **Zero-Latency Dynamic Switching:** Subroutine entry hooks (`khcom_fn_entry_hook`) monitor game execution states in real time (`mode_battle_*`, `task_btl_*`, `task_fld_*`, `mode_status_*`, etc.) to automatically toggle between True Widescreen and 3:2 Pillarbox without frame stutter or manual user intervention.
+- **PPU Rasterizer & HUD Anchoring Integration:**
+  - `khcom_tilemap_provider`: Preserves authentic VRAM tilemap wrapping (`kWsTilemapKeepWrapped`) during combat for full-width arena background coverage.
+  - `khcom_bg_x_provider`: Handles layer visibility. Ensures dialogue windows on BG0 remain centered over the 240px native play area without bleeding into margins, anchors BG1 HUD elements to screen edges when enabled, and blanks margin columns during non-battle sequences.
+  - `khcom_obj_attr_x_provider`: Hooks OAM sprite attributes in real time. Displaces Sora's HP bar to the top-left margin (`X -= extra_left`) and Card Deck / reload counter to the bottom-right margin (`X += extra_right`) when Widescreen Anchoring is active, while unwrapping 9-bit signed coordinates so sprites do not pop on opposite screen edges.
 
 ### 9. Native RAM Overlay Dispatch & Combat Performance Optimization
 - **Binary-Search Dispatcher:** Routes all 168 dynamic IWRAM (`0x0300xxxx`) and EWRAM (`0x0203xxxx`) combat routines directly to their native recompiled implementations.
@@ -125,14 +128,14 @@ All adjustments made in the overlay take effect immediately in real time and are
 - **Pixel Zoom and Window Scaling:**
   Independent nearest-neighbor / integer scaling multiplier (1x to 8x, and Fullscreen toggle via `Alt + Enter`).
 
-### 11. High-Fidelity Audio DSP Suite
+### 12. High-Fidelity Audio DSP Suite
 - **MP2K Shadow Mixer:** High-sample-rate shadow voice mixer eliminating GBA hardware audio quantization noise.
 - **DAC Anti-Aliasing Filter:** Biquad low-pass filter targeting ultrasonic PWM/DAC switching hiss.
 - **Parametric Equalizer Profiles:** *Flat (Authentic)*, *Warm Retro*, *Crisp Modern*, *Bass Boost*.
 - **Stereo Width Expansion:** Adjustable from 0% (mono) to 200% (expanded stereo).
 - **Soft-Knee Peak Limiter:** Prevents digital clipping on multi-card sleights.
 
-### 12. Assist Tools & Save State Thumbnails
+### 13. Assist Tools & Save State Thumbnails
 - **Save States & Load States:** 10 independent slots with visual thumbnail capture (`saves/thumbnails/slot_X.bmp`) and timestamps.
 - **Fast-Forward:** Uncaps framerate with a customizable multiplier from **2x to 10x** (default: 4x).
 - **Rewind:** Real-time rewind buffer capturing up to 60 seconds of continuous gameplay.
@@ -142,7 +145,7 @@ All adjustments made in the overlay take effect immediately in real time and are
 
 ## Default Controls
 
-Key mappings can be configured in [keybinds.ini](file:///c:/Users/RafaelInostroza/Desktop/KHCOMR/keybinds.ini) or via the in-game overlay:
+Key mappings can be configured in [keybinds.ini](keybinds.ini) or via the in-game overlay:
 
 | Function | Keyboard | Gamepad (Xbox / PlayStation / Switch) |
 |---|---|---|
@@ -171,20 +174,40 @@ Key mappings can be configured in [keybinds.ini](file:///c:/Users/RafaelInostroz
 
 ## Build Workflow
 
-### 1. Static Recompilation
+### Linux
+
+#### 1. Build the Game Executable
+```bash
+./build.sh --config Release
+```
+Or with CMake directly:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja
+cmake --build build --config Release --target KHCOMRecomp
+```
+The resulting executable is at `./KHCOMRecomp` (or `build/KHCOMRecomp`).
+
+#### 2. Execution
+```bash
+./KHCOMRecomp
+```
+
+### Windows
+
+#### 1. Static Recompilation
 Generates native C++ sources from the ARM/Thumb instructions in the ROM:
 ```powershell
 .\build.ps1 -Recompile
 ```
 
-### 2. Build the Game Executable
+#### 2. Build the Game Executable
 Compiles the generated C++ shards and links them with the runtime, overlay, enhancement modules, and SDL2:
 ```powershell
 .\build.ps1 -Target KHCOMRecomp -Config Release
 ```
 The resulting binary is generated at `build\Release\KHCOMRecomp.exe`.
 
-### 3. Execution
+#### 3. Execution
 ```powershell
 .\build\Release\KHCOMRecomp.exe
 ```

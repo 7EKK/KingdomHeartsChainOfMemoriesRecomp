@@ -47,4 +47,4 @@ The dialogue window uses Background Layer 0 or 1 configured in standard text mod
 
 ## Recommended Solution
 
-For wide-display presentations, Dynamic Widescreen HUD Anchoring ([src/hud_anchoring.h](file:///c:/Users/RafaelInostroza/Desktop/KHCOMR/src/hud_anchoring.h)) provides immediate screen decluttering without breaking dialogue synchronization or requiring binary script re-encoding.
+For wide-display presentations, Dynamic Widescreen HUD Anchoring ([src/hud_anchoring.h](../src/hud_anchoring.h)) provides immediate screen decluttering without breaking dialogue synchronization or requiring binary script re-encoding.

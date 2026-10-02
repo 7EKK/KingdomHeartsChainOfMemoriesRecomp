@@ -19,78 +19,42 @@
 # sha1:  10729bd884f8fdca7a310b6d606c52e46657aa48
 
 [[extra_func]]
-addr = 0x02038738
+addr = 0x0806D334
 mode = "thumb"
 note = "proposed from self-heal miss-log; bridged x1"
 
 [[extra_func]]
-addr = 0x0203875A
+addr = 0x0806DA34
 mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1"
-
-# ── JUMP-TABLE CANDIDATE: 7 consecutive thumb misses in [0x03000000, 0x030000B8] ──
-# Likely the case targets of a computed-jump switch the finder
-# could not size. PREFER one sized [[jump_table]] over the 7
-# [[extra_func]] below: find the abs32 table base (the
-# `ldr rT,[pc,#..]; add rT,index<<2; ldr/mov pc` dispatcher) and
-# add `[[jump_table]] addr=<base> stride=4 count=<CMP bound> format="abs32" entries_mode="auto"`.
-[[extra_func]]
-addr = 0x03000000
-mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1; part of a JUMP-TABLE CANDIDATE (prefer a sized [[jump_table]])"
+note = "proposed from self-heal miss-log; bridged x8"
 
 [[extra_func]]
-addr = 0x03000060
+addr = 0x0806E14E
 mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1; part of a JUMP-TABLE CANDIDATE (prefer a sized [[jump_table]])"
+note = "proposed from self-heal miss-log; bridged x5"
 
 [[extra_func]]
-addr = 0x0300006E
-mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1; part of a JUMP-TABLE CANDIDATE (prefer a sized [[jump_table]])"
-
-[[extra_func]]
-addr = 0x0300007A
-mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1; part of a JUMP-TABLE CANDIDATE (prefer a sized [[jump_table]])"
-
-[[extra_func]]
-addr = 0x03000098
-mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1; part of a JUMP-TABLE CANDIDATE (prefer a sized [[jump_table]])"
-
-[[extra_func]]
-addr = 0x030000AC
-mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1; part of a JUMP-TABLE CANDIDATE (prefer a sized [[jump_table]])"
-
-[[extra_func]]
-addr = 0x030000B8
-mode = "thumb"
-note = "proposed from self-heal miss-log; bridged x1; part of a JUMP-TABLE CANDIDATE (prefer a sized [[jump_table]])"
-
-[[extra_func]]
-addr = 0x03000380
+addr = 0x08073768
 mode = "thumb"
 note = "proposed from self-heal miss-log; bridged x1"
 
 [[extra_func]]
-addr = 0x0300038A
+addr = 0x0807457C
 mode = "thumb"
 note = "proposed from self-heal miss-log; bridged x1"
 
 [[extra_func]]
-addr = 0x03006C80
-mode = "arm"
+addr = 0x08075F14
+mode = "thumb"
 note = "proposed from self-heal miss-log; bridged x1"
 
 [[extra_func]]
-addr = 0x03006D50
-mode = "arm"
+addr = 0x080A1C7C
+mode = "thumb"
 note = "proposed from self-heal miss-log; bridged x1"
 
 [[extra_func]]
-addr = 0x03006D8C
-mode = "arm"
+addr = 0x080A1F18
+mode = "thumb"
 note = "proposed from self-heal miss-log; bridged x1"
 

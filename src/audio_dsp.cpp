@@ -223,16 +223,35 @@ void AudioDsp::process_stereo(int16_t* interleaved_samples, std::size_t frame_co
 
 } // namespace khcom
 
+extern "C" int khcom_queue_audio_intercept(SDL_AudioDeviceID dev, const void* data, Uint32 len);
+
+#if defined(__GNUC__) || defined(__clang__)
+extern "C" {
+int __real_SDL_QueueAudio(SDL_AudioDeviceID dev, const void* data, Uint32 len);
+int __wrap_SDL_QueueAudio(SDL_AudioDeviceID dev, const void* data, Uint32 len) {
+    return khcom_queue_audio_intercept(dev, data, len);
+}
+}
+#endif
+
 extern "C" {
 int khcom_queue_audio_intercept(SDL_AudioDeviceID dev, const void* data, Uint32 len) {
     if (!data || len == 0) {
+#if defined(__GNUC__) || defined(__clang__)
+        return __real_SDL_QueueAudio(dev, data, len);
+#else
         return SDL_QueueAudio(dev, data, len);
+#endif
     }
     size_t sample_count = len / sizeof(int16_t);
     std::vector<int16_t> scratch(static_cast<const int16_t*>(data), static_cast<const int16_t*>(data) + sample_count);
     khcom::HdAudioPlayer::instance().mix_audio(scratch.data(), sample_count, 2, 65536);
     khcom::AudioDsp::instance().process_stereo(scratch.data(), sample_count / 2, 65536);
+#if defined(__GNUC__) || defined(__clang__)
+    return __real_SDL_QueueAudio(dev, scratch.data(), len);
+#else
     return SDL_QueueAudio(dev, scratch.data(), len);
+#endif
 }
 }
 
