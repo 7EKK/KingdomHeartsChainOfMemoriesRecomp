@@ -369,6 +369,51 @@ static void test_dialogue_box_scaler() {
     std::cout << "[PASS] C++ DialogueBoxScaler unit test passed" << std::endl;
 }
 
+static void test_widescreen_view_modes() {
+    khcom_install_widescreen_adapter(22, 22);
+
+    // Initial state: not in battle
+    khcom_set_battle_active(false);
+    assert(!khcom_is_battle_active());
+
+    // 1. Test 16:9 view mode outside of battle:
+    // Should crop source to authentic central 240x160 (from x=22) and fit to 3:2 layout
+    SDL_Rect src{}, dst{};
+    int base_w = 0, base_h = 0;
+    khcom_compute_effective_viewport(284, 160, 1920, 1080, &src, &dst, &base_w, &base_h);
+    assert(src.x == 22 && src.y == 0 && src.w == 240 && src.h == 160);
+    assert(base_w == 240 && base_h == 160);
+    // In 1920x1080, 3:2 aspect fit fills height (1080) and width is 1080 * 3 / 2 = 1620
+    assert(dst.h == 1080);
+    assert(dst.w == 1620);
+    assert(dst.x == (1920 - 1620) / 2); // 150
+
+    // 2. Test 16:9 view mode during battle:
+    // Should use full 284x160 arena and fit to 16:9 layout
+    khcom_set_battle_active(true);
+    assert(khcom_is_battle_active());
+    khcom_compute_effective_viewport(284, 160, 1920, 1080, &src, &dst, &base_w, &base_h);
+    assert(src.x == 0 && src.y == 0 && src.w == 284 && src.h == 160);
+    assert(base_w == 284 && base_h == 160);
+    assert(dst.w > 0 && dst.h > 0);
+    assert(dst.w <= 1920 && dst.h <= 1080);
+
+    // 3. Test Native 3:2 view mode everywhere:
+    // Should always be 3:2 regardless of battle state
+    khcom_compute_effective_viewport(240, 160, 1920, 1080, &src, &dst, &base_w, &base_h);
+    assert(src.x == 0 && src.y == 0 && src.w == 240 && src.h == 160);
+    assert(base_w == 240 && base_h == 160);
+    assert(dst.h == 1080 && dst.w == 1620);
+
+    // 4. Test integer prescaled texture (e.g. sharp scaler 2x: 568x320)
+    khcom_set_battle_active(false);
+    khcom_compute_effective_viewport(568, 320, 1920, 1080, &src, &dst, &base_w, &base_h);
+    assert(src.x == 44 && src.y == 0 && src.w == 480 && src.h == 320);
+    assert(dst.h == 1080 && dst.w == 1620);
+
+    std::cout << "[PASS] C++ WidescreenViewModes unit test passed" << std::endl;
+}
+
 int main() {
     std::cout << "================================================================" << std::endl;
     std::cout << "           KHCOMRecomp Native C++ Unit Test Runner             " << std::endl;
@@ -386,9 +431,10 @@ int main() {
     test_dialogue_components();
     test_font_resizer();
     test_dialogue_box_scaler();
+    test_widescreen_view_modes();
 
     std::cout << "================================================================" << std::endl;
-    std::cout << "ALL NATIVE C++ UNIT TESTS PASSED SUCCESSFULLY (12/12 MODULES)." << std::endl;
+    std::cout << "ALL NATIVE C++ UNIT TESTS PASSED SUCCESSFULLY (13/13 MODULES)." << std::endl;
     std::cout << "================================================================" << std::endl;
     return 0;
 }

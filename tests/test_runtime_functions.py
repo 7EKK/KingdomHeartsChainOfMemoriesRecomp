@@ -224,10 +224,29 @@ def test_widescreen_adapter_hooks():
     assert "khcom_obj_attr_x_provider" in content
     assert "khcom_install_widescreen_adapter" in content
     assert "khcom_update_widescreen_state" in content
+    assert "khcom_is_battle_active" in content
+    assert "khcom_compute_effective_viewport" in content
 
     # Test coordinate math simulations:
     extra_left = 22
     extra_right = 22
+
+    # Viewport calculations simulation:
+    # 1. Fixed 16:9 during battle arena: full 284x160 into 16:9 layout
+    win_w, win_h = 1920, 1080
+    scale_16_9 = min(win_w / 284.0, win_h / 160.0)
+    dw_16_9 = int(284.0 * scale_16_9)
+    dh_16_9 = int(160.0 * scale_16_9)
+    assert dw_16_9 > 0 and dh_16_9 > 0
+    assert dw_16_9 <= win_w and dh_16_9 <= win_h
+
+    # 2. Fixed 16:9 outside of battle: cropped to 240x160 from x=22, aspect ratio 3:2
+    scale_3_2 = min(win_w / 240.0, win_h / 160.0)
+    dw_3_2 = int(240.0 * scale_3_2)
+    dh_3_2 = int(160.0 * scale_3_2)
+    assert dh_3_2 == 1080
+    assert dw_3_2 == 1620
+    assert (win_w - dw_3_2) // 2 == 150
 
     # BG0 dialogue suppression in margins
     out_x_left_margin = 10

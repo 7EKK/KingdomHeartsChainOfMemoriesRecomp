@@ -3,6 +3,7 @@
 #include "screen_filters.h"
 #include "dialogue_backlog.h"
 #include "ram_overlay_dispatch.h"
+#include "widescreen_adapter.h"
 #include <SDL.h>
 #ifdef SDL_RenderPresent
 #undef SDL_RenderPresent
@@ -566,6 +567,8 @@ int khcom_update_texture_intercept(SDL_Texture* texture, const SDL_Rect* rect, c
 #endif
 }
 
+static SDL_Rect s_last_game_dst = { 0, 0, 240, 160 };
+
 int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, const SDL_Rect* srcrect, const SDL_Rect* dstrect) {
     if (!renderer || !texture) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -575,71 +578,80 @@ int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, co
 #endif
     }
 
-    uint32_t format = 0;
-    int access = 0, tex_w = 0, tex_h = 0;
-    if (SDL_QueryTexture(texture, &format, &access, &tex_w, &tex_h) == 0 && format == SDL_PIXELFORMAT_RGB24) {
-        int lw = 0, lh = 0;
-        SDL_RenderGetLogicalSize(renderer, &lw, &lh);
-        int out_w = 0, out_h = 0;
-        SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
-
-        if (dstrect != nullptr) {
-            if (lw > 0 && lh > 0) {
-                SDL_RenderSetLogicalSize(renderer, 0, 0);
-            }
+    // Only intercept presentation to the final backbuffer; offscreen target passes straight through
+    if (SDL_GetRenderTarget(renderer) != nullptr) {
 #if defined(__GNUC__) || defined(__clang__)
-            int res = __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+        return __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 #else
-            int res = (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
+        return (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
 #endif
-            khcom::ScreenFilters::instance().render_mask(renderer, dstrect, tex_w, tex_h);
-            return res;
-        } else {
-            if (tex_w == 240 && tex_h == 160) {
-                if (lw != 240 || lh != 160) {
-                    SDL_RenderSetLogicalSize(renderer, 240, 160);
-                }
-#if defined(__GNUC__) || defined(__clang__)
-                int res = __real_SDL_RenderCopy(renderer, texture, srcrect, nullptr);
-#else
-                int res = (SDL_RenderCopy)(renderer, texture, srcrect, nullptr);
-#endif
-                SDL_Rect vp{};
-                SDL_RenderGetViewport(renderer, &vp);
-                khcom::ScreenFilters::instance().render_mask(renderer, &vp, 240, 160);
-                return res;
-            } else {
-                SDL_RenderSetLogicalSize(renderer, 0, 0);
-                float s = std::min(static_cast<float>(out_w) / tex_w, static_cast<float>(out_h) / tex_h);
-                int dw = static_cast<int>(tex_w * s);
-                int dh = static_cast<int>(tex_h * s);
-                SDL_Rect centered_dst = { (out_w - dw) / 2, (out_h - dh) / 2, dw, dh };
-#if defined(__GNUC__) || defined(__clang__)
-                int res = __real_SDL_RenderCopy(renderer, texture, srcrect, &centered_dst);
-#else
-                int res = (SDL_RenderCopy)(renderer, texture, srcrect, &centered_dst);
-#endif
-                khcom::ScreenFilters::instance().render_mask(renderer, &centered_dst, tex_w, tex_h);
-                return res;
-            }
-        }
     }
 
+    uint32_t format = 0;
+    int access = 0, tex_w = 0, tex_h = 0;
+    if (SDL_QueryTexture(texture, &format, &access, &tex_w, &tex_h) != 0 || tex_w <= 0 || tex_h <= 0) {
 #if defined(__GNUC__) || defined(__clang__)
-    return __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+        return __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 #else
-    return (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
+        return (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
 #endif
+    }
+
+    // Identify if this is the GBA game presentation texture:
+    // Either direct PPU framebuffer (RGB24 streaming, 240x160 or 284x160)
+    // or sharp prescaled target (RGBA8888 target, integer scaled 240*K x 160*K or 284*K x 160*K)
+    const bool is_direct_gba = (format == SDL_PIXELFORMAT_RGB24 && tex_h == 160 && (tex_w == 240 || tex_w == 284));
+    const bool is_scaled_284 = (tex_h % 160 == 0) && (tex_w % 284 == 0) && (tex_w / 284 == tex_h / 160);
+    const bool is_scaled_240 = (tex_h % 160 == 0) && (tex_w % 240 == 0) && (tex_w / 240 == tex_h / 160);
+    const bool is_game_texture = is_direct_gba || is_scaled_284 || is_scaled_240;
+
+    if (!is_game_texture) {
+#if defined(__GNUC__) || defined(__clang__)
+        return __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+#else
+        return (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
+#endif
+    }
+
+    int out_w = 0, out_h = 0;
+    SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
+    if (out_w <= 0 || out_h <= 0) {
+#if defined(__GNUC__) || defined(__clang__)
+        return __real_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+#else
+        return (SDL_RenderCopy)(renderer, texture, srcrect, dstrect);
+#endif
+    }
+
+    // Always reset logical size so it never corrupts SDL_RenderClear or ImGui coordinates
+    int lw = 0, lh = 0;
+    SDL_RenderGetLogicalSize(renderer, &lw, &lh);
+    if (lw != 0 || lh != 0) {
+        SDL_RenderSetLogicalSize(renderer, 0, 0);
+    }
+
+    SDL_Rect src{};
+    SDL_Rect dst{};
+    int base_w = 240;
+    int base_h = 160;
+    khcom_compute_effective_viewport(tex_w, tex_h, out_w, out_h, &src, &dst, &base_w, &base_h);
+    s_last_game_dst = dst;
+
+#if defined(__GNUC__) || defined(__clang__)
+    int res = __real_SDL_RenderCopy(renderer, texture, &src, &dst);
+#else
+    int res = (SDL_RenderCopy)(renderer, texture, &src, &dst);
+#endif
+
+    khcom::ScreenFilters::instance().render_mask(renderer, &dst, base_w, base_h);
+    return res;
 }
 
 void khcom_render_present_intercept(SDL_Renderer* renderer) {
     if (renderer) {
-        SDL_Rect game_viewport{};
-        int logical_w = 0, logical_h = 0;
-        SDL_RenderGetLogicalSize(renderer, &logical_w, &logical_h);
-        SDL_RenderGetViewport(renderer, &game_viewport);
+        khcom_widescreen_notify_present();
 
-        khcom::FrameInterpolator::instance().on_present(renderer, &game_viewport);
+        khcom::FrameInterpolator::instance().on_present(renderer, &s_last_game_dst);
         khcom::PerfHud::instance().on_frame_present(renderer);
 
         int win_w = 0, win_h = 0;

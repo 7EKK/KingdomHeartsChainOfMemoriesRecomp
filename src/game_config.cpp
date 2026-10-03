@@ -672,14 +672,15 @@ gbarecomp::RunOptions create_run_options() {
     opts.rewind_history_seconds = 60;
     opts.rewind_capture_interval_frames = 15;
 
-    // Video display and real-time viewport expansion
+    // Video display and viewport configuration:
+    // Fixed 16:9 widescreen active ONLY during battle arenas; authentic 3:2 elsewhere
     opts.freely_resizable_window = true;
-    opts.resize_driven_view = true;
-    opts.max_view_width = 576;
-    opts.max_resize_view_width = 576;
-    opts.max_resize_view_height = 324;
+    opts.resize_driven_view = false;
+    opts.max_view_width = 284;
+    opts.max_resize_view_width = 284;
+    opts.max_resize_view_height = 160;
     opts.launcher_expose_widescreen = true;
-    opts.launcher_expose_adaptive_view = true;
+    opts.launcher_expose_adaptive_view = false;
     opts.widescreen_view_width = 284;
     opts.launcher_aspect_labels = kAspectLabels;
     opts.launcher_aspect_view_widths = kAspectWidths;
@@ -687,6 +688,9 @@ gbarecomp::RunOptions create_run_options() {
     opts.launcher_expose_sharp_filter = true;
     opts.launcher_default_sharp_filter = true;
     opts.extended_view_init = &khcom_install_widescreen_adapter;
+
+    // Immediately install widescreen hooks so battle state tracking is active from frame 0
+    khcom_install_widescreen_adapter(22, 22);
 
 #if defined(GBARECOMP_RUNTIME_UI)
     opts.ui_extra_items = kExtraItems;
@@ -712,6 +716,9 @@ RecompRuntimeUi* __wrap_recomp_runtime_ui_create_standard(const RecompRuntimeUiS
     if (!standard) return nullptr;
     RecompRuntimeUiStandardConfig cfg = *standard;
     cfg.features &= ~static_cast<uint64_t>(RECOMP_RUNTIME_UI_STANDARD_RESUME);
+    cfg.view_modes = RECOMP_RUNTIME_UI_VIEW_MODE_NATIVE | RECOMP_RUNTIME_UI_VIEW_MODE_FIXED_16_9;
+    cfg.native_view_label = "3:2 (Native)";
+    cfg.fixed_view_label = "16:9 (Battles only)";
     return __real_recomp_runtime_ui_create_standard(&cfg);
 }
 }
