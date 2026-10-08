@@ -4,6 +4,7 @@
 #include "dialogue_backlog.h"
 #include "ram_overlay_dispatch.h"
 #include "widescreen_adapter.h"
+#include "game_config.h"
 #include <SDL.h>
 #ifdef SDL_RenderPresent
 #undef SDL_RenderPresent
@@ -149,6 +150,132 @@ void PerfHud::set_mode(PerfHudMode mode) {
 
 void PerfHud::set_position(PerfHudPosition pos) {
     settings_.position = pos;
+    float hud_w = current_width();
+    float hud_h = current_height();
+    int win_w = last_win_w_ > 0 ? last_win_w_ : 1280;
+    int win_h = last_win_h_ > 0 ? last_win_h_ : 720;
+    switch (pos) {
+        case PerfHudPosition::TopLeft:
+            settings_.custom_x = 16.0f;
+            settings_.custom_y = 16.0f;
+            break;
+        case PerfHudPosition::TopRight:
+            settings_.custom_x = std::max(0.0f, static_cast<float>(win_w) - hud_w - 16.0f);
+            settings_.custom_y = 16.0f;
+            break;
+        case PerfHudPosition::BottomLeft:
+            settings_.custom_x = 16.0f;
+            settings_.custom_y = std::max(0.0f, static_cast<float>(win_h) - hud_h - 16.0f);
+            break;
+        case PerfHudPosition::BottomRight:
+            settings_.custom_x = std::max(0.0f, static_cast<float>(win_w) - hud_w - 16.0f);
+            settings_.custom_y = std::max(0.0f, static_cast<float>(win_h) - hud_h - 16.0f);
+            break;
+        case PerfHudPosition::BottomBlackBar:
+            settings_.custom_x = std::max(0.0f, (static_cast<float>(win_w) - hud_w) * 0.5f);
+            settings_.custom_y = std::max(0.0f, static_cast<float>(win_h) - hud_h - 16.0f);
+            break;
+        case PerfHudPosition::FreeDrag:
+        default:
+            break;
+    }
+    calculated_x_ = settings_.custom_x;
+    calculated_y_ = settings_.custom_y;
+}
+
+float PerfHud::current_width() const {
+    if (settings_.mode == PerfHudMode::FpsOnly) {
+        return 88.0f;
+    } else if (settings_.mode == PerfHudMode::FpsAndFrametime) {
+        return 164.0f;
+    } else if (settings_.mode == PerfHudMode::FullWithGraph) {
+        return 200.0f;
+    }
+    return 170.0f;
+}
+
+float PerfHud::current_height() const {
+    if (settings_.mode == PerfHudMode::FpsOnly) {
+        return 24.0f;
+    } else if (settings_.mode == PerfHudMode::FpsAndFrametime) {
+        return 44.0f;
+    } else if (settings_.mode == PerfHudMode::FullWithGraph) {
+        return 88.0f;
+    }
+    return 36.0f;
+}
+
+bool PerfHud::handle_mouse_event(const SDL_Event& event) {
+    if (settings_.mode == PerfHudMode::Off) {
+        is_hovered_ = false;
+        is_dragging_ = false;
+        return false;
+    }
+
+    float hud_w = current_width();
+    float hud_h = current_height();
+    int cur_w = last_win_w_ > 0 ? last_win_w_ : 1280;
+    int cur_h = last_win_h_ > 0 ? last_win_h_ : 720;
+
+    auto to_render_coords = [&](int in_x, int in_y, Uint32 windowID, int& out_x, int& out_y) {
+        SDL_Window* win = SDL_GetWindowFromID(windowID);
+        if (!win && last_window_) win = last_window_;
+        if (win) {
+            int ww = 0, wh = 0;
+            SDL_GetWindowSize(win, &ww, &wh);
+            if (ww > 0 && wh > 0) {
+                out_x = (in_x * cur_w) / ww;
+                out_y = (in_y * cur_h) / wh;
+                return;
+            }
+        }
+        out_x = in_x;
+        out_y = in_y;
+    };
+
+    if (event.type == SDL_MOUSEBUTTONDOWN) {
+        if (event.button.button == SDL_BUTTON_LEFT) {
+            int mx = 0, my = 0;
+            to_render_coords(event.button.x, event.button.y, event.button.windowID, mx, my);
+
+            if (mx >= calculated_x_ && mx <= calculated_x_ + hud_w &&
+                my >= calculated_y_ && my <= calculated_y_ + hud_h) {
+                is_dragging_ = true;
+                drag_offset_x_ = static_cast<float>(mx) - calculated_x_;
+                drag_offset_y_ = static_cast<float>(my) - calculated_y_;
+                settings_.position = PerfHudPosition::FreeDrag;
+                settings_.custom_x = calculated_x_;
+                settings_.custom_y = calculated_y_;
+                SDL_ShowCursor(SDL_ENABLE);
+                return true;
+            }
+        }
+    } else if (event.type == SDL_MOUSEMOTION) {
+        int mx = 0, my = 0;
+        to_render_coords(event.motion.x, event.motion.y, event.motion.windowID, mx, my);
+
+        is_hovered_ = (mx >= calculated_x_ && mx <= calculated_x_ + hud_w &&
+                       my >= calculated_y_ && my <= calculated_y_ + hud_h);
+        if (is_hovered_) {
+            SDL_ShowCursor(SDL_ENABLE);
+        }
+
+        if (is_dragging_) {
+            settings_.custom_x = std::clamp(static_cast<float>(mx) - drag_offset_x_, 0.0f, static_cast<float>(cur_w - hud_w));
+            settings_.custom_y = std::clamp(static_cast<float>(my) - drag_offset_y_, 0.0f, static_cast<float>(cur_h - hud_h));
+            calculated_x_ = settings_.custom_x;
+            calculated_y_ = settings_.custom_y;
+            return true;
+        }
+    } else if (event.type == SDL_MOUSEBUTTONUP) {
+        if (event.button.button == SDL_BUTTON_LEFT && is_dragging_) {
+            is_dragging_ = false;
+            khcom::save_khcom_config();
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void PerfHud::set_theme(PerfHudTheme theme) {
@@ -228,23 +355,31 @@ void PerfHud::draw_text(SDL_Renderer* renderer, int x, int y, const char* str, u
 }
 
 void PerfHud::update_drag(int mouse_x, int mouse_y, bool mouse_down, float hud_w, float hud_h) {
+    int cur_w = last_win_w_ > 0 ? last_win_w_ : 1280;
+    int cur_h = last_win_h_ > 0 ? last_win_h_ : 720;
     if (mouse_down) {
         if (!is_dragging_) {
             if (mouse_x >= calculated_x_ && mouse_x <= calculated_x_ + hud_w &&
                 mouse_y >= calculated_y_ && mouse_y <= calculated_y_ + hud_h) {
                 is_dragging_ = true;
-                drag_offset_x_ = mouse_x - calculated_x_;
-                drag_offset_y_ = mouse_y - calculated_y_;
+                drag_offset_x_ = static_cast<float>(mouse_x) - calculated_x_;
+                drag_offset_y_ = static_cast<float>(mouse_y) - calculated_y_;
                 settings_.position = PerfHudPosition::FreeDrag;
+                settings_.custom_x = calculated_x_;
+                settings_.custom_y = calculated_y_;
+                SDL_ShowCursor(SDL_ENABLE);
             }
         } else {
-            settings_.custom_x = mouse_x - drag_offset_x_;
-            settings_.custom_y = mouse_y - drag_offset_y_;
+            settings_.custom_x = std::clamp(static_cast<float>(mouse_x) - drag_offset_x_, 0.0f, static_cast<float>(cur_w - hud_w));
+            settings_.custom_y = std::clamp(static_cast<float>(mouse_y) - drag_offset_y_, 0.0f, static_cast<float>(cur_h - hud_h));
             calculated_x_ = settings_.custom_x;
             calculated_y_ = settings_.custom_y;
         }
     } else {
-        is_dragging_ = false;
+        if (is_dragging_) {
+            is_dragging_ = false;
+            khcom::save_khcom_config();
+        }
     }
 }
 
@@ -252,57 +387,51 @@ void PerfHud::render_hud(SDL_Renderer* renderer, int win_w, int win_h, int vp_x,
     if (settings_.mode == PerfHudMode::Off) return;
 
     // Determine dimensions based on mode
-    float hud_w = 170.0f;
-    float hud_h = 36.0f;
-
-    if (settings_.mode == PerfHudMode::FpsOnly) {
-        hud_w = 88.0f;
-        hud_h = 24.0f;
-    } else if (settings_.mode == PerfHudMode::FpsAndFrametime) {
-        hud_w = 164.0f;
-        hud_h = 44.0f;
-    } else if (settings_.mode == PerfHudMode::FullWithGraph) {
-        hud_w = 200.0f;
-        hud_h = 88.0f;
-    }
+    float hud_w = current_width();
+    float hud_h = current_height();
 
     // Determine position
     float pos_x = 16.0f;
     float pos_y = 16.0f;
 
-    switch (settings_.position) {
-        case PerfHudPosition::TopLeft:
-            pos_x = 16.0f;
-            pos_y = 16.0f;
-            break;
-        case PerfHudPosition::TopRight:
-            pos_x = win_w - hud_w - 16.0f;
-            pos_y = 16.0f;
-            break;
-        case PerfHudPosition::BottomLeft:
-            pos_x = 16.0f;
-            pos_y = win_h - hud_h - 16.0f;
-            break;
-        case PerfHudPosition::BottomRight:
-            pos_x = win_w - hud_w - 16.0f;
-            pos_y = win_h - hud_h - 16.0f;
-            break;
-        case PerfHudPosition::BottomBlackBar: {
-            int bar_y = vp_y + vp_h;
-            int bar_height = win_h - bar_y;
-            if (bar_height >= hud_h + 8.0f) {
-                pos_x = (win_w - hud_w) * 0.5f;
-                pos_y = bar_y + (bar_height - hud_h) * 0.5f;
-            } else {
+    if (is_dragging_ || settings_.position == PerfHudPosition::FreeDrag) {
+        pos_x = std::clamp(settings_.custom_x, 0.0f, static_cast<float>(win_w - hud_w));
+        pos_y = std::clamp(settings_.custom_y, 0.0f, static_cast<float>(win_h - hud_h));
+    } else {
+        switch (settings_.position) {
+            case PerfHudPosition::TopLeft:
+                pos_x = 16.0f;
+                pos_y = 16.0f;
+                break;
+            case PerfHudPosition::TopRight:
+                pos_x = win_w - hud_w - 16.0f;
+                pos_y = 16.0f;
+                break;
+            case PerfHudPosition::BottomLeft:
+                pos_x = 16.0f;
+                pos_y = win_h - hud_h - 16.0f;
+                break;
+            case PerfHudPosition::BottomRight:
                 pos_x = win_w - hud_w - 16.0f;
                 pos_y = win_h - hud_h - 16.0f;
+                break;
+            case PerfHudPosition::BottomBlackBar: {
+                int bar_y = vp_y + vp_h;
+                int bar_height = win_h - bar_y;
+                if (bar_height >= hud_h + 8.0f) {
+                    pos_x = (win_w - hud_w) * 0.5f;
+                    pos_y = bar_y + (bar_height - hud_h) * 0.5f;
+                } else {
+                    pos_x = win_w - hud_w - 16.0f;
+                    pos_y = win_h - hud_h - 16.0f;
+                }
+                break;
             }
-            break;
+            default:
+                pos_x = std::clamp(settings_.custom_x, 0.0f, static_cast<float>(win_w - hud_w));
+                pos_y = std::clamp(settings_.custom_y, 0.0f, static_cast<float>(win_h - hud_h));
+                break;
         }
-        case PerfHudPosition::FreeDrag:
-            pos_x = std::clamp(settings_.custom_x, 0.0f, static_cast<float>(win_w - hud_w));
-            pos_y = std::clamp(settings_.custom_y, 0.0f, static_cast<float>(win_h - hud_h));
-            break;
     }
 
     calculated_x_ = pos_x;
@@ -320,6 +449,12 @@ void PerfHud::render_hud(SDL_Renderer* renderer, int win_w, int win_h, int vp_x,
             mx = (mx * win_w) / cur_w;
             my = (my * win_h) / cur_h;
         }
+    }
+
+    is_hovered_ = (mx >= calculated_x_ && mx <= calculated_x_ + hud_w &&
+                   my >= calculated_y_ && my <= calculated_y_ + hud_h);
+    if (is_hovered_) {
+        SDL_ShowCursor(SDL_ENABLE);
     }
 
     update_drag(mx, my, mouse_down, hud_w, hud_h);
@@ -354,6 +489,16 @@ void PerfHud::render_hud(SDL_Renderer* renderer, int win_w, int win_h, int vp_x,
             SDL_SetRenderDrawColor(renderer, border_r, border_g, border_b, border_a);
             SDL_RenderDrawRect(renderer, &bg_rect);
         }
+
+        if (is_dragging_) {
+            SDL_SetRenderDrawColor(renderer, 6, 182, 212, 255);
+            SDL_Rect hl = { static_cast<int>(pos_x) - 1, static_cast<int>(pos_y) - 1, static_cast<int>(hud_w) + 2, static_cast<int>(hud_h) + 2 };
+            SDL_RenderDrawRect(renderer, &hl);
+        } else if (is_hovered_) {
+            SDL_SetRenderDrawColor(renderer, 56, 189, 248, 180);
+            SDL_Rect hl = { static_cast<int>(pos_x), static_cast<int>(pos_y), static_cast<int>(hud_w), static_cast<int>(hud_h) };
+            SDL_RenderDrawRect(renderer, &hl);
+        }
     }
 
     const double target_fps = FrameInterpolator::instance().target_fps();
@@ -377,9 +522,15 @@ void PerfHud::render_hud(SDL_Renderer* renderer, int win_w, int win_h, int vp_x,
                 std::snprintf(line_buf, sizeof(line_buf), "FPS: %.1f / %.0f", current_fps_, target_fps);
                 draw_text(renderer, static_cast<int>(pos_x) + 8, static_cast<int>(pos_y) + 7, line_buf, stat_r, stat_g, stat_b, 255, 1);
 
-                // Target badge
-                const char* lock_str = (std::abs(current_fps_ - target_fps) <= 1.5f) ? "[LOCKED]" : "[VAR]";
-                draw_text(renderer, static_cast<int>(pos_x) + 130, static_cast<int>(pos_y) + 7, lock_str, 120, 140, 170, 220, 1);
+                // Target badge / drag cue
+                if (is_dragging_) {
+                    draw_text(renderer, static_cast<int>(pos_x) + 124, static_cast<int>(pos_y) + 7, "[MOVING]", 6, 182, 212, 255, 1);
+                } else if (is_hovered_) {
+                    draw_text(renderer, static_cast<int>(pos_x) + 130, static_cast<int>(pos_y) + 7, "[DRAG]", 56, 189, 248, 220, 1);
+                } else {
+                    const char* lock_str = (std::abs(current_fps_ - target_fps) <= 1.5f) ? "[LOCKED]" : "[VAR]";
+                    draw_text(renderer, static_cast<int>(pos_x) + 130, static_cast<int>(pos_y) + 7, lock_str, 120, 140, 170, 220, 1);
+                }
 
                 // Line 2: Frametime in ms
                 std::snprintf(line_buf, sizeof(line_buf), "TIME: %.2f ms", current_frametime_ms_);
@@ -441,6 +592,8 @@ void PerfHud::render_hud(SDL_Renderer* renderer, int win_w, int win_h, int vp_x,
             }
 }
 
+static SDL_Rect s_last_game_dst = { 0, 0, 240, 160 };
+
 void PerfHud::on_frame_present(SDL_Renderer* renderer) {
     if (!renderer) return;
 
@@ -458,21 +611,21 @@ void PerfHud::on_frame_present(SDL_Renderer* renderer) {
 
     int win_w = 0, win_h = 0;
     SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
-
-    int logical_w = 0, logical_h = 0;
-    SDL_Rect game_viewport{};
-    SDL_RenderGetLogicalSize(renderer, &logical_w, &logical_h);
-    SDL_RenderGetViewport(renderer, &game_viewport);
+    last_win_w_ = win_w;
+    last_win_h_ = win_h;
+    last_window_ = SDL_RenderGetWindow(renderer);
 
     // Switch to full window coordinates to allow drawing anywhere including black bars
     SDL_RenderSetLogicalSize(renderer, 0, 0);
     SDL_RenderSetViewport(renderer, nullptr);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 
-    render_hud(renderer, win_w, win_h, game_viewport.x, game_viewport.y, game_viewport.w, game_viewport.h);
+    render_hud(renderer, win_w, win_h, s_last_game_dst.x, s_last_game_dst.y, s_last_game_dst.w, s_last_game_dst.h);
 
-    // Restore original game viewport
-    SDL_RenderSetLogicalSize(renderer, logical_w, logical_h);
-    SDL_RenderSetViewport(renderer, &game_viewport);
+    // Keep viewport clean at full window coordinates
+    SDL_RenderSetLogicalSize(renderer, 0, 0);
+    SDL_RenderSetViewport(renderer, nullptr);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 }
 
 } // namespace khcom
@@ -526,8 +679,17 @@ int khcom_poll_event_intercept(SDL_Event* event) {
         if (!res) {
             return 0;
         }
-        if (event && khcom::DialogueBacklog::instance().handle_event(*event)) {
-            continue;
+        if (event) {
+            if ((event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) &&
+                event->key.keysym.sym == SDLK_ESCAPE) {
+                event->key.keysym.scancode = SDL_SCANCODE_ESCAPE;
+            }
+            if (khcom::DialogueBacklog::instance().handle_event(*event)) {
+                continue;
+            }
+            if (khcom::PerfHud::instance().handle_mouse_event(*event)) {
+                continue;
+            }
         }
         return res;
     }
@@ -567,8 +729,6 @@ int khcom_update_texture_intercept(SDL_Texture* texture, const SDL_Rect* rect, c
 #endif
 }
 
-static SDL_Rect s_last_game_dst = { 0, 0, 240, 160 };
-
 int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, const SDL_Rect* srcrect, const SDL_Rect* dstrect) {
     if (!renderer || !texture) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -600,10 +760,15 @@ int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, co
     // Identify if this is the GBA game presentation texture:
     // Either direct PPU framebuffer (RGB24 streaming, 240x160 or 284x160)
     // or sharp prescaled target (RGBA8888 target, integer scaled 240*K x 160*K or 284*K x 160*K)
-    const bool is_direct_gba = (format == SDL_PIXELFORMAT_RGB24 && tex_h == 160 && (tex_w == 240 || tex_w == 284));
-    const bool is_scaled_284 = (tex_h % 160 == 0) && (tex_w % 284 == 0) && (tex_w / 284 == tex_h / 160);
-    const bool is_scaled_240 = (tex_h % 160 == 0) && (tex_w % 240 == 0) && (tex_w / 240 == tex_h / 160);
-    const bool is_game_texture = is_direct_gba || is_scaled_284 || is_scaled_240;
+    const bool is_streaming_gba = (access == SDL_TEXTUREACCESS_STREAMING &&
+                                   format == SDL_PIXELFORMAT_RGB24 &&
+                                   tex_h == 160 && (tex_w == 240 || tex_w == 284));
+    const bool is_scaled_target = (access == SDL_TEXTUREACCESS_TARGET &&
+                                   format == SDL_PIXELFORMAT_RGBA8888 &&
+                                   tex_h % 160 == 0 &&
+                                   ((tex_w % 284 == 0 && tex_w / 284 == tex_h / 160) ||
+                                    (tex_w % 240 == 0 && tex_w / 240 == tex_h / 160)));
+    const bool is_game_texture = is_streaming_gba || is_scaled_target;
 
     if (!is_game_texture) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -623,19 +788,45 @@ int khcom_render_copy_intercept(SDL_Renderer* renderer, SDL_Texture* texture, co
 #endif
     }
 
-    // Always reset logical size so it never corrupts SDL_RenderClear or ImGui coordinates
+    // Always normalize renderer to full-window 1:1 pixel coordinates
     int lw = 0, lh = 0;
     SDL_RenderGetLogicalSize(renderer, &lw, &lh);
     if (lw != 0 || lh != 0) {
         SDL_RenderSetLogicalSize(renderer, 0, 0);
     }
+    float sx = 1.0f, sy = 1.0f;
+    SDL_RenderGetScale(renderer, &sx, &sy);
+    if (sx != 1.0f || sy != 1.0f) {
+        SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+    }
+    SDL_RenderSetClipRect(renderer, nullptr);
+    SDL_RenderSetViewport(renderer, nullptr);
 
     SDL_Rect src{};
     SDL_Rect dst{};
     int base_w = 240;
     int base_h = 160;
     khcom_compute_effective_viewport(tex_w, tex_h, out_w, out_h, &src, &dst, &base_w, &base_h);
-    s_last_game_dst = dst;
+    khcom::s_last_game_dst = dst;
+
+    // Clear letterbox / pillarbox areas outside the game viewport to pure black
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    if (dst.x > 0) {
+        SDL_Rect bar = { 0, 0, dst.x, out_h };
+        SDL_RenderFillRect(renderer, &bar);
+    }
+    if (dst.x + dst.w < out_w) {
+        SDL_Rect bar = { dst.x + dst.w, 0, out_w - (dst.x + dst.w), out_h };
+        SDL_RenderFillRect(renderer, &bar);
+    }
+    if (dst.y > 0) {
+        SDL_Rect bar = { 0, 0, out_w, dst.y };
+        SDL_RenderFillRect(renderer, &bar);
+    }
+    if (dst.y + dst.h < out_h) {
+        SDL_Rect bar = { 0, dst.y + dst.h, out_w, out_h - (dst.y + dst.h) };
+        SDL_RenderFillRect(renderer, &bar);
+    }
 
 #if defined(__GNUC__) || defined(__clang__)
     int res = __real_SDL_RenderCopy(renderer, texture, &src, &dst);
@@ -651,7 +842,7 @@ void khcom_render_present_intercept(SDL_Renderer* renderer) {
     if (renderer) {
         khcom_widescreen_notify_present();
 
-        khcom::FrameInterpolator::instance().on_present(renderer, &s_last_game_dst);
+        khcom::FrameInterpolator::instance().on_present(renderer, &khcom::s_last_game_dst);
         khcom::PerfHud::instance().on_frame_present(renderer);
 
         int win_w = 0, win_h = 0;

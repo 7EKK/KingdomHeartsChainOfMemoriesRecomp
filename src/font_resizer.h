@@ -14,8 +14,15 @@ enum class FontScale : int {
     Micro55     = 3  // 5x7 glyphs, 8px line spacing
 };
 
+enum class FontStyle : int {
+    Authentic   = 0, // Authentic standard GBA pixel font
+    CleanModern = 1, // Anti-aliased high-contrast sans glyphs
+    Condensed   = 2  // Space-saving condensed kerning typography
+};
+
 struct FontResizerSettings {
     FontScale scale = FontScale::Original100;
+    FontStyle style = FontStyle::CleanModern;
     int line_spacing = 16;       // Vertical line pitch in pixels (8 to 20)
     int kerning_adjustment = 0;   // Kerning offset in pixels (-2 to +2)
     bool edge_smoothing = true;   // Anti-aliased font downsampling
@@ -29,6 +36,7 @@ public:
     FontResizerSettings& settings() { return settings_; }
 
     void set_font_scale(FontScale scale);
+    void set_font_style(FontStyle style);
     void set_line_spacing(int spacing_px);
     void set_kerning_adjustment(int kerning_px);
     void set_edge_smoothing(bool enable);
@@ -44,6 +52,18 @@ public:
     // 4bpp GBA tile: 32 bytes (2 pixels per byte, 8 rows of 4 bytes)
     void render_scaled_glyph_4bpp(const uint8_t* src_glyph_1bpp, uint8_t* dst_tile_4bpp, uint8_t fg_palette_idx = 1);
 
+    // Addresses of font tables in Game Boy Advance ROM
+    static constexpr uint32_t kFontWidthTableBase = 0x08F7D438u;
+    static constexpr uint32_t kFontWidthTableEnd  = 0x08F7D638u; // 256 halfwords = 512 bytes
+    static constexpr uint32_t kFontTilesBase      = 0x090CBFB2u;
+    static constexpr uint32_t kFontTilesEnd       = 0x090CBFB2u + 256 * 128u; // 32768 bytes
+
+    // Hook to intercept bus and ROM reads for font advance widths and glyph sprite tiles
+    bool intercept_bus_read(uint32_t addr, uint32_t width, uint32_t* out_val);
+
+    // Forces reloading authentic ROM tiles and recomputing cache
+    void invalidate_cache();
+
     // Hook to intercept and resize text tile uploads into GBA VRAM BG Character Blocks
     bool intercept_text_tile_upload(uint32_t vram_dest_addr, const uint8_t* tile_data, size_t size, uint8_t* vram_base);
 
@@ -51,11 +71,17 @@ private:
     FontResizer();
 
     void update_metrics_for_scale(FontScale scale);
+    void ensure_authentic_rom_loaded();
+    void recompute_cache();
 
     FontResizerSettings settings_;
     int glyph_w_ = 8;
     int glyph_h_ = 12;
-    uint8_t advance_table_[128];
+    uint8_t advance_table_[256];
+    uint16_t font_width_cache_[256];
+    uint8_t font_tile_cache_[256 * 128];
+    uint8_t authentic_rom_tiles_[256 * 128];
+    bool authentic_rom_loaded_ = false;
 };
 
 } // namespace khcom

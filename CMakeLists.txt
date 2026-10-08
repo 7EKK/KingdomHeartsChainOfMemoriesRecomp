@@ -150,6 +150,11 @@ if(NOT MSVC)
 endif()
 set_target_properties(KHCOMRecomp PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 
+add_custom_command(TARGET KHCOMRecomp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:KHCOMRecomp> "${CMAKE_CURRENT_SOURCE_DIR}/KHCOMRecomp"
+)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sdl2/lib/x64/SDL2.dll")
     add_custom_command(TARGET KHCOMRecomp POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

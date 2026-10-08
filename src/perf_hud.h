@@ -4,6 +4,8 @@
 #include <cstddef>
 
 struct SDL_Renderer;
+struct SDL_Window;
+union SDL_Event;
 
 namespace khcom {
 
@@ -51,6 +53,17 @@ public:
     void set_theme(PerfHudTheme theme);
     void cycle_mode();
 
+    bool handle_mouse_event(const SDL_Event& event);
+    float current_width() const;
+    float current_height() const;
+
+    int last_window_width() const { return last_win_w_; }
+    int last_window_height() const { return last_win_h_; }
+    float calculated_x() const { return calculated_x_; }
+    float calculated_y() const { return calculated_y_; }
+    bool is_dragging() const { return is_dragging_; }
+    bool is_hovered() const { return is_hovered_; }
+
     void on_frame_present(SDL_Renderer* renderer);
 
 private:
@@ -81,10 +94,14 @@ private:
     size_t history_head_ = 0;
 
     bool is_dragging_ = false;
+    bool is_hovered_ = false;
     float drag_offset_x_ = 0.0f;
     float drag_offset_y_ = 0.0f;
     float calculated_x_ = 20.0f;
     float calculated_y_ = 20.0f;
+    int last_win_w_ = 1280;
+    int last_win_h_ = 720;
+    SDL_Window* last_window_ = nullptr;
 
     bool last_f10_state_ = false;
 };

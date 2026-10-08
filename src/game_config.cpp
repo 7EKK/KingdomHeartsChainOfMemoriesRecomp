@@ -11,6 +11,9 @@
 #include "dialogue_enhancer.h"
 #include "dialogue_backlog.h"
 #include "widescreen_adapter.h"
+#include "runtime_bus_bridge.h"
+#include "gba/gba_bus.h"
+#include "gba/gba_io.h"
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -24,19 +27,13 @@ namespace khcom {
 namespace {
 
 const char* const kAspectLabels[] = {
-    "3:2 (Classic 240px)",
-    "16:10 (Wide 256px)",
-    "16:9 (Standard 284px)",
-    "16:9 (High-Density 480px)",
-    "16:9 (Full Arena 576px)"
+    "3:2 (Native)",
+    "16:9 (Battles only)"
 };
 
 const std::uint16_t kAspectWidths[] = {
     240,
-    256,
-    284,
-    480,
-    576
+    284
 };
 
 #if defined(GBARECOMP_RUNTIME_UI)
@@ -87,6 +84,34 @@ const char* const kAnalogChoices[] = {
     "True 360 Walk & Run"
 };
 
+const char* const kGamepadProfileChoices[] = {
+    "Xbox / Standard (A: Atk, B: Jump, LB/RB: Deck)",
+    "Nintendo Style (B: Atk, A: Jump, LB/RB: Deck)",
+    "PlayStation Style (Square/X: Atk, Cross/A: Jump)",
+    "Swapped Shoulders (RB: Deck L, LB: Deck R)",
+    "Triggers for Deck (LT: Deck L, RT: Deck R)",
+    "Custom Profile"
+};
+
+const char* const kPadButtonChoices[] = {
+    "Button A (Bottom / Cross)",
+    "Button B (Right / Circle)",
+    "Button X (Left / Square)",
+    "Button Y (Top / Triangle)",
+    "Left Bumper (LB / L1)",
+    "Right Bumper (RB / R1)",
+    "Left Trigger (LT / L2)",
+    "Right Trigger (RT / R2)"
+};
+
+const char* const kKeyboardPresetChoices[] = {
+    "Default (X, Z, C, V, Return, RShift)",
+    "WASD + J/K/U/I (Modern PC)",
+    "Classic Emulation (Z, X, A, S)",
+    "Arrows + Z/X/Q/W",
+    "Custom"
+};
+
 const char* const kHudAnchorChoices[] = {
     "Original Centered (GBA 3:2)",
     "Widescreen Anchored (Corners)"
@@ -96,6 +121,25 @@ const char* const kFontDensityChoices[] = {
     "Original (100% GBA Spacing)",
     "Compact (80% Spacing)",
     "High-Density (65% Spacing)"
+};
+
+const char* const kFontScaleChoices[] = {
+    "Authentic (100% - 8x12 Standard)",
+    "Medium (85% - 7x10)",
+    "Compact (70% - 6x8)",
+    "Micro (55% - 5x7)"
+};
+
+const char* const kFontStyleChoices[] = {
+    "Authentic GBA Proportional",
+    "Clean Modern Sans",
+    "Condensed Space-Saver"
+};
+
+const char* const kLineCapacityChoices[] = {
+    "Authentic (3 Lines GBA)",
+    "Dense (2 Lines Compact)",
+    "Expanded (4 Lines Widescreen)"
 };
 
 const char* const kEqChoices[] = {
@@ -133,7 +177,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "video.fps_target",
         "Graphics",
         "Target Framerate",
-        "High refresh rate presentation without altering gameplay speed",
+        "Target refresh rate without altering speed",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 4, 1,
         kFpsTargetChoices, 5, nullptr
@@ -142,7 +186,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "video.motion_smoothing",
         "Graphics",
         "Motion Smoothing",
-        "GPU temporal blending between simulation frames for high-Hz displays",
+        "Temporal blending between simulation frames",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 2, 1,
         kMotionSmoothingChoices, 3, nullptr
@@ -151,7 +195,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "video.xbrz_scale",
         "Graphics",
         "xBRZ Pixel Scaler",
-        "High-precision geometric edge upscaler (2x to 5x)",
+        "Geometric pixel art upscaler (2x to 5x)",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 4, 1,
         kXbrzChoices, 5, nullptr
@@ -160,7 +204,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "video.color_profile",
         "Graphics",
         "Color Profile / Gamma",
-        "Hardware color grading and gamma correction curves",
+        "Hardware color grading and gamma curve",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 5, 1,
         kColorProfileChoices, 6, nullptr
@@ -169,7 +213,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "video.screen_mask",
         "Graphics",
         "Screen Mask Type",
-        "LCD pixel grid, RGB subpixel stripes, or CRT scanlines from MiSTer FPGA",
+        "LCD grid, RGB subpixel stripes, scanlines",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 6, 1,
         kScreenMaskChoices, 7, nullptr
@@ -178,7 +222,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "video.mask_intensity",
         "Graphics",
         "Mask Intensity (%)",
-        "Grid and scanline darkness: 10% (subtle) to 100% (pronounced)",
+        "Grid darkness: 10% (subtle) to 100% (dense)",
         RECOMP_RUNTIME_UI_INT,
         10, 100, 5,
         nullptr, 0, nullptr
@@ -187,25 +231,196 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "video.hud_anchoring",
         "Display",
         "HUD Dynamic Anchoring",
-        "Shift health bar to top-left and card deck to bottom-right in widescreen",
+        "Shift health and cards to edges in 16:9",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 1, 1,
         kHudAnchorChoices, 2, nullptr
     },
     {
+        "input.gamepad_profile",
+        "Controller (Gamepad)",
+        "Controller Preset",
+        "Quick layout profile preset",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 5, 1,
+        kGamepadProfileChoices, 6, nullptr
+    },
+    {
+        "input.pad_attack",
+        "Controller (Gamepad)",
+        "Attack / Card Action",
+        "Play card, attack, menu confirm",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 7, 1,
+        kPadButtonChoices, 8, nullptr
+    },
+    {
+        "input.pad_jump",
+        "Controller (Gamepad)",
+        "Jump / Dodge Roll",
+        "Jump, dodge roll, menu cancel",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 7, 1,
+        kPadButtonChoices, 8, nullptr
+    },
+    {
+        "input.pad_deck_l",
+        "Controller (Gamepad)",
+        "Cycle Deck Left",
+        "Scroll deck cards to the left",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 7, 1,
+        kPadButtonChoices, 8, nullptr
+    },
+    {
+        "input.pad_deck_r",
+        "Controller (Gamepad)",
+        "Cycle Deck Right / Lock-on",
+        "Scroll deck right and lock-on",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 7, 1,
+        kPadButtonChoices, 8, nullptr
+    },
+    {
         "input.analog_mode",
-        "Controls",
-        "Analog Movement Mode",
-        "Map controller stick to true 360 walk/run or 8-way digital",
+        "Controller (Gamepad)",
+        "Stick Movement Mode",
+        "360 walk/run or 8-way digital",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 2, 1,
         kAnalogChoices, 3, nullptr
     },
     {
+        "input.deadzone",
+        "Controller (Gamepad)",
+        "Stick Deadzone (%)",
+        "Stick drift margin (5% to 50%)",
+        RECOMP_RUNTIME_UI_INT,
+        5, 50, 5,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.reset_pad",
+        "Controller (Gamepad)",
+        "Reset Gamepad to Defaults",
+        "Restore default gamepad mapping",
+        RECOMP_RUNTIME_UI_ACTION,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.kb_preset",
+        "Keyboard Controls",
+        "Keyboard Preset",
+        "Keyboard layout preset",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 4, 1,
+        kKeyboardPresetChoices, 5, nullptr
+    },
+    {
+        "input.key_a",
+        "Keyboard Controls",
+        "Attack / Card Action",
+        "Play card, attack, menu confirm",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_b",
+        "Keyboard Controls",
+        "Jump / Dodge Roll",
+        "Jump, dodge roll, menu cancel",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_l",
+        "Keyboard Controls",
+        "Cycle Deck Left",
+        "Scroll deck cards to the left",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_r",
+        "Keyboard Controls",
+        "Cycle Deck Right / Lock-on",
+        "Scroll deck right and lock-on",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_start",
+        "Keyboard Controls",
+        "Pause / Camp Menu",
+        "Open journal and pause game",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_select",
+        "Keyboard Controls",
+        "Switch Deck / Reload",
+        "Toggle enemy cards and reload",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_up",
+        "Keyboard Controls",
+        "Move Up",
+        "Move character upwards",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_down",
+        "Keyboard Controls",
+        "Move Down",
+        "Move character downwards",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_left",
+        "Keyboard Controls",
+        "Move Left",
+        "Move character to the left",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.key_right",
+        "Keyboard Controls",
+        "Move Right",
+        "Move character to the right",
+        RECOMP_RUNTIME_UI_TEXT,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
+        "input.reset_kb",
+        "Keyboard Controls",
+        "Reset Keyboard to Defaults",
+        "Restore default keyboard mapping",
+        RECOMP_RUNTIME_UI_ACTION,
+        0, 0, 0,
+        nullptr, 0, nullptr
+    },
+    {
         "gameplay.turbo_dialog",
         "Gameplay & Assist",
         "Turbo Dialog & Cutscene Skip",
-        "Hold Tab or Gamepad Y to auto-advance dialogue boxes at 60Hz",
+        "Hold Tab or Y to advance text at 60Hz",
         RECOMP_RUNTIME_UI_BOOL,
         0, 1, 1,
         nullptr, 0, nullptr
@@ -214,16 +429,43 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "dialogue.font_density",
         "Dialogue & Story",
         "Font Density",
-        "Compact text spacing allows more words per line without altering typewriter speed",
+        "Compact spacing to fit more text per line",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 2, 1,
         kFontDensityChoices, 3, nullptr
     },
     {
+        "dialogue.font_scale",
+        "Dialogue & Story",
+        "Font Size",
+        "Glyph dimensions and line spacing",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 3, 2,
+        kFontScaleChoices, 4, nullptr
+    },
+    {
+        "dialogue.font_style",
+        "Dialogue & Story",
+        "Font Style",
+        "Pixel art font style and kerning",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 2, 1,
+        kFontStyleChoices, 3, nullptr
+    },
+    {
+        "dialogue.line_capacity",
+        "Dialogue & Story",
+        "Box Line Target",
+        "Target box lines: 2 dense, 3 or 4 lines",
+        RECOMP_RUNTIME_UI_CHOICE,
+        0, 2, 1,
+        kLineCapacityChoices, 3, nullptr
+    },
+    {
         "dialogue.soft_word_wrap",
         "Dialogue & Story",
         "Grammar-Aware Word-Wrap",
-        "Continuously joins mid-sentence lines using case and punctuation heuristics",
+        "Joins mid-sentence cutscene lines cleanly",
         RECOMP_RUNTIME_UI_BOOL,
         0, 1, 1,
         nullptr, 0, nullptr
@@ -232,7 +474,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "dialogue.backlog_enable",
         "Dialogue & Story",
         "Conversation Log (Backlog)",
-        "Enable translucent story history sidebar (press L, F2, or Gamepad Back)",
+        "Translucent story history (press L or F2)",
         RECOMP_RUNTIME_UI_BOOL,
         0, 1, 1,
         nullptr, 0, nullptr
@@ -241,7 +483,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "dialogue.open_backlog",
         "Dialogue & Story",
         "Open Conversation Log",
-        "View story transcript and dialogue history sidebar",
+        "View transcript and story history",
         RECOMP_RUNTIME_UI_ACTION,
         0, 0, 0,
         nullptr, 0, nullptr
@@ -250,7 +492,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "audio.hd_enabled",
         "Audio",
         "HD Re:CoM Soundtrack",
-        "Replace GBA chiptunes with high-fidelity PS2 Re:CoM tracks",
+        "High-fidelity PS2 Re:CoM soundtrack",
         RECOMP_RUNTIME_UI_BOOL,
         0, 1, 1,
         nullptr, 0, nullptr
@@ -259,7 +501,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "audio.bgm_volume",
         "Audio",
         "Music (BGM) Volume (%)",
-        "Independent BGM volume for HD soundtrack (0% to 150%)",
+        "Independent music volume (0% to 150%)",
         RECOMP_RUNTIME_UI_INT,
         0, 150, 5,
         nullptr, 0, nullptr
@@ -268,7 +510,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "audio.sfx_volume",
         "Audio",
         "Effects (SFX) Volume (%)",
-        "Independent sound effects and combat audio volume (0% to 150%)",
+        "Independent sound effects volume (0-150%)",
         RECOMP_RUNTIME_UI_INT,
         0, 150, 5,
         nullptr, 0, nullptr
@@ -277,7 +519,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "perf.mode",
         "Diagnostics & HUD",
         "Display Mode",
-        "Real-time FPS and frametime tracking (or press F10 to cycle)",
+        "FPS and frametime overlay (or press F10)",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 3, 1,
         kPerfModeChoices, 4, nullptr
@@ -286,7 +528,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "perf.position",
         "Diagnostics & HUD",
         "Screen Position",
-        "Anchor corner, letterbox black bar docking, or free mouse drag",
+        "Screen corner or drag anywhere with mouse",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 5, 1,
         kPerfPositionChoices, 6, nullptr
@@ -295,7 +537,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "perf.theme",
         "Diagnostics & HUD",
         "Visual Theme",
-        "Color palette and background transparency styling",
+        "Color palette and background opacity",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 3, 1,
         kPerfThemeChoices, 4, nullptr
@@ -304,7 +546,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "audio.eq_preset",
         "Audio",
         "Equalizer Profile",
-        "Real-time DSP equalization profile",
+        "Real-time DSP sound equalizer profile",
         RECOMP_RUNTIME_UI_CHOICE,
         0, 3, 1,
         kEqChoices, 4, nullptr
@@ -313,7 +555,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "audio.stereo_width",
         "Audio",
         "Stereo Width (%)",
-        "Stereo field width: 0% mono to 200% expanded stereo",
+        "Stereo width: 0% mono to 200% expanded",
         RECOMP_RUNTIME_UI_INT,
         0, 200, 10,
         nullptr, 0, nullptr
@@ -322,7 +564,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "audio.anti_aliasing",
         "Audio",
         "DAC Anti-Aliasing",
-        "Biquad low-pass filter to remove GBA DAC high-frequency hiss",
+        "Biquad filter to cut GBA audio hiss",
         RECOMP_RUNTIME_UI_BOOL,
         0, 1, 1,
         nullptr, 0, nullptr
@@ -331,7 +573,7 @@ const RecompRuntimeUiItem kExtraItems[] = {
         "audio.limiter",
         "Audio",
         "Dynamic Peak Limiter",
-        "Soft-knee limiter to prevent audio clipping on multi-card hits",
+        "Dynamic limiter preventing audio clipping",
         RECOMP_RUNTIME_UI_BOOL,
         0, 1, 1,
         nullptr, 0, nullptr
@@ -354,6 +596,18 @@ int ui_get_callback(const char* key, int* value_out) {
 
     if (std::strcmp(key, "dialogue.font_density") == 0) {
         *value_out = static_cast<int>(enhancer.settings().density);
+        return 1;
+    }
+    if (std::strcmp(key, "dialogue.font_scale") == 0) {
+        *value_out = static_cast<int>(enhancer.settings().scale);
+        return 1;
+    }
+    if (std::strcmp(key, "dialogue.font_style") == 0) {
+        *value_out = static_cast<int>(enhancer.settings().style);
+        return 1;
+    }
+    if (std::strcmp(key, "dialogue.line_capacity") == 0) {
+        *value_out = static_cast<int>(enhancer.settings().line_capacity);
         return 1;
     }
     if (std::strcmp(key, "dialogue.soft_word_wrap") == 0) {
@@ -396,6 +650,34 @@ int ui_get_callback(const char* key, int* value_out) {
     }
     if (std::strcmp(key, "input.analog_mode") == 0) {
         *value_out = static_cast<int>(input.settings().analog_mode);
+        return 1;
+    }
+    if (std::strcmp(key, "input.deadzone") == 0) {
+        *value_out = static_cast<int>(input.settings().deadzone * 100.0f + 0.5f);
+        return 1;
+    }
+    if (std::strcmp(key, "input.gamepad_profile") == 0) {
+        *value_out = static_cast<int>(input.settings().gamepad_profile);
+        return 1;
+    }
+    if (std::strcmp(key, "input.pad_attack") == 0) {
+        *value_out = static_cast<int>(input.settings().pad_attack);
+        return 1;
+    }
+    if (std::strcmp(key, "input.pad_jump") == 0) {
+        *value_out = static_cast<int>(input.settings().pad_jump);
+        return 1;
+    }
+    if (std::strcmp(key, "input.pad_deck_l") == 0) {
+        *value_out = static_cast<int>(input.settings().pad_deck_l);
+        return 1;
+    }
+    if (std::strcmp(key, "input.pad_deck_r") == 0) {
+        *value_out = static_cast<int>(input.settings().pad_deck_r);
+        return 1;
+    }
+    if (std::strcmp(key, "input.kb_preset") == 0) {
+        *value_out = static_cast<int>(input.settings().kb_preset);
         return 1;
     }
     if (std::strcmp(key, "gameplay.turbo_dialog") == 0) {
@@ -446,9 +728,57 @@ int ui_get_callback(const char* key, int* value_out) {
 }
 
 static int ui_action_callback(const char* key) {
-    if (key && std::strcmp(key, "dialogue.open_backlog") == 0) {
+    if (!key) return 0;
+    if (std::strcmp(key, "dialogue.open_backlog") == 0) {
         DialogueBacklog::instance().set_open(true);
         return 1;
+    }
+    if (std::strcmp(key, "input.reset_controls") == 0) {
+        InputEnhancements::instance().reset_to_defaults();
+        save_khcom_config();
+        return 1;
+    }
+    if (std::strcmp(key, "input.reset_pad") == 0) {
+        InputEnhancements::instance().reset_gamepad_defaults();
+        save_khcom_config();
+        return 1;
+    }
+    if (std::strcmp(key, "input.reset_kb") == 0) {
+        InputEnhancements::instance().reset_keyboard_defaults();
+        save_khcom_config();
+        return 1;
+    }
+    return 0;
+}
+
+static int ui_get_text_callback(const char* key, char* buf, std::size_t buf_len) {
+    if (!key || !buf || buf_len == 0) return 0;
+    auto& input = InputEnhancements::instance();
+    if (std::strncmp(key, "input.key_", 10) == 0) {
+        const char* name = key + 10;
+        GbaKeyIndex idx = input.key_index_from_name(name);
+        if (idx != KEY_COUNT) {
+            const char* kname = input.get_key_name(idx);
+            std::snprintf(buf, buf_len, "%s", kname);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int ui_set_text_callback(const char* key, const char* value) {
+    if (!key || !value) return 0;
+    auto& input = InputEnhancements::instance();
+    if (std::strncmp(key, "input.key_", 10) == 0) {
+        const char* name = key + 10;
+        GbaKeyIndex idx = input.key_index_from_name(name);
+        if (idx != KEY_COUNT) {
+            bool ok = input.set_key_from_name(idx, value);
+            if (ok) {
+                input.save_keybinds();
+            }
+            return ok ? 1 : 0;
+        }
     }
     return 0;
 }
@@ -463,7 +793,7 @@ static int ui_enabled_callback(const char* key) {
 
 static bool s_is_loading_config = false;
 
-void save_khcom_config() {
+static void save_khcom_config_impl() {
     std::ofstream file("khcom_config.ini");
     if (!file.is_open()) return;
 
@@ -500,11 +830,21 @@ void save_khcom_config() {
 
     file << "[Dialogue]\n";
     file << "font_density=" << static_cast<int>(enhancer.settings().density) << "\n";
+    file << "font_scale=" << static_cast<int>(enhancer.settings().scale) << "\n";
+    file << "font_style=" << static_cast<int>(enhancer.settings().style) << "\n";
+    file << "line_capacity=" << static_cast<int>(enhancer.settings().line_capacity) << "\n";
     file << "soft_word_wrap=" << (enhancer.settings().soft_word_wrap ? 1 : 0) << "\n";
     file << "backlog_enable=" << (backlog.is_enabled() ? 1 : 0) << "\n\n";
 
     file << "[Controls]\n";
-    file << "analog_mode=" << static_cast<int>(input.settings().analog_mode) << "\n\n";
+    file << "analog_mode=" << static_cast<int>(input.settings().analog_mode) << "\n";
+    file << "analog_deadzone=" << static_cast<int>(input.settings().deadzone * 100.0f + 0.5f) << "\n";
+    file << "gamepad_profile=" << static_cast<int>(input.settings().gamepad_profile) << "\n";
+    file << "pad_attack=" << static_cast<int>(input.settings().pad_attack) << "\n";
+    file << "pad_jump=" << static_cast<int>(input.settings().pad_jump) << "\n";
+    file << "pad_deck_l=" << static_cast<int>(input.settings().pad_deck_l) << "\n";
+    file << "pad_deck_r=" << static_cast<int>(input.settings().pad_deck_r) << "\n";
+    file << "kb_preset=" << static_cast<int>(input.settings().kb_preset) << "\n\n";
 
     file << "[Gameplay]\n";
     file << "turbo_dialog=" << (turbo.is_enabled() ? 1 : 0) << "\n\n";
@@ -513,6 +853,8 @@ void save_khcom_config() {
     file << "perf_mode=" << static_cast<int>(hud.settings().mode) << "\n";
     file << "perf_position=" << static_cast<int>(hud.settings().position) << "\n";
     file << "perf_theme=" << static_cast<int>(hud.settings().theme) << "\n";
+    file << "hud_custom_x=" << static_cast<int>(hud.settings().custom_x) << "\n";
+    file << "hud_custom_y=" << static_cast<int>(hud.settings().custom_y) << "\n";
 }
 
 int ui_set_callback(const char* key, int value) {
@@ -532,6 +874,15 @@ int ui_set_callback(const char* key, int value) {
     bool handled = false;
     if (std::strcmp(key, "dialogue.font_density") == 0) {
         enhancer.set_density(static_cast<FontDensity>(value));
+        handled = true;
+    } else if (std::strcmp(key, "dialogue.font_scale") == 0) {
+        enhancer.set_font_scale(static_cast<FontScale>(value));
+        handled = true;
+    } else if (std::strcmp(key, "dialogue.font_style") == 0) {
+        enhancer.set_font_style(static_cast<FontStyle>(value));
+        handled = true;
+    } else if (std::strcmp(key, "dialogue.line_capacity") == 0) {
+        enhancer.set_line_capacity(static_cast<LineCapacityMode>(value));
         handled = true;
     } else if (std::strcmp(key, "dialogue.soft_word_wrap") == 0) {
         enhancer.set_soft_word_wrap(value != 0);
@@ -563,6 +914,27 @@ int ui_set_callback(const char* key, int value) {
         handled = true;
     } else if (std::strcmp(key, "input.analog_mode") == 0) {
         input.set_analog_mode(static_cast<AnalogMode>(value));
+        handled = true;
+    } else if (std::strcmp(key, "input.deadzone") == 0) {
+        input.set_deadzone(static_cast<float>(value) / 100.0f);
+        handled = true;
+    } else if (std::strcmp(key, "input.gamepad_profile") == 0) {
+        input.apply_gamepad_profile(static_cast<GamepadProfile>(value));
+        handled = true;
+    } else if (std::strcmp(key, "input.pad_attack") == 0) {
+        input.set_pad_attack(value);
+        handled = true;
+    } else if (std::strcmp(key, "input.pad_jump") == 0) {
+        input.set_pad_jump(value);
+        handled = true;
+    } else if (std::strcmp(key, "input.pad_deck_l") == 0) {
+        input.set_pad_deck_l(value);
+        handled = true;
+    } else if (std::strcmp(key, "input.pad_deck_r") == 0) {
+        input.set_pad_deck_r(value);
+        handled = true;
+    } else if (std::strcmp(key, "input.kb_preset") == 0) {
+        input.apply_keyboard_preset(static_cast<KeyboardPreset>(value));
         handled = true;
     } else if (std::strcmp(key, "gameplay.turbo_dialog") == 0) {
         turbo.set_enabled(value != 0);
@@ -608,7 +980,10 @@ int ui_set_callback(const char* key, int value) {
     return 0;
 }
 
-void load_khcom_config() {
+static void load_khcom_config_impl() {
+    auto& input = InputEnhancements::instance();
+    input.load_keybinds();
+
     std::ifstream file("khcom_config.ini");
     if (!file.is_open()) return;
 
@@ -644,13 +1019,25 @@ void load_khcom_config() {
         else if (key == "anti_aliasing") ui_set_callback("audio.anti_aliasing", val);
         else if (key == "limiter") ui_set_callback("audio.limiter", val);
         else if (key == "font_density") ui_set_callback("dialogue.font_density", val);
+        else if (key == "font_scale") ui_set_callback("dialogue.font_scale", val);
+        else if (key == "font_style") ui_set_callback("dialogue.font_style", val);
+        else if (key == "line_capacity") ui_set_callback("dialogue.line_capacity", val);
         else if (key == "soft_word_wrap") ui_set_callback("dialogue.soft_word_wrap", val);
         else if (key == "backlog_enable") ui_set_callback("dialogue.backlog_enable", val);
         else if (key == "analog_mode") ui_set_callback("input.analog_mode", val);
+        else if (key == "analog_deadzone") ui_set_callback("input.deadzone", val);
+        else if (key == "gamepad_profile") ui_set_callback("input.gamepad_profile", val);
+        else if (key == "pad_attack") ui_set_callback("input.pad_attack", val);
+        else if (key == "pad_jump") ui_set_callback("input.pad_jump", val);
+        else if (key == "pad_deck_l") ui_set_callback("input.pad_deck_l", val);
+        else if (key == "pad_deck_r") ui_set_callback("input.pad_deck_r", val);
+        else if (key == "kb_preset") ui_set_callback("input.kb_preset", val);
         else if (key == "turbo_dialog") ui_set_callback("gameplay.turbo_dialog", val);
         else if (key == "perf_mode") ui_set_callback("perf.mode", val);
         else if (key == "perf_position") ui_set_callback("perf.position", val);
         else if (key == "perf_theme") ui_set_callback("perf.theme", val);
+        else if (key == "hud_custom_x") PerfHud::instance().settings().custom_x = static_cast<float>(val);
+        else if (key == "hud_custom_y") PerfHud::instance().settings().custom_y = static_cast<float>(val);
     }
     s_is_loading_config = false;
 }
@@ -658,11 +1045,61 @@ void load_khcom_config() {
 
 } // namespace
 
+void save_khcom_config() {
+#if defined(GBARECOMP_RUNTIME_UI)
+    save_khcom_config_impl();
+#endif
+}
+
+void load_khcom_config() {
+#if defined(GBARECOMP_RUNTIME_UI)
+    load_khcom_config_impl();
+#endif
+}
+
+#if defined(GBARECOMP_RUNTIME_UI)
+static RecompRuntimeUi* s_active_runtime_ui = nullptr;
+
+bool is_runtime_menu_open() {
+    return s_active_runtime_ui && recomp_runtime_ui_is_open(s_active_runtime_ui);
+}
+
+void open_runtime_menu() {
+    if (s_active_runtime_ui && !recomp_runtime_ui_is_open(s_active_runtime_ui)) {
+        recomp_runtime_ui_open(s_active_runtime_ui);
+    }
+}
+
+void close_runtime_menu() {
+    if (s_active_runtime_ui && recomp_runtime_ui_is_open(s_active_runtime_ui)) {
+        recomp_runtime_ui_close(s_active_runtime_ui);
+    }
+}
+
+void toggle_runtime_menu() {
+    if (s_active_runtime_ui) {
+        if (recomp_runtime_ui_is_open(s_active_runtime_ui)) {
+            recomp_runtime_ui_close(s_active_runtime_ui);
+        } else {
+            recomp_runtime_ui_open(s_active_runtime_ui);
+        }
+    }
+}
+#else
+bool is_runtime_menu_open() {
+    return false;
+}
+void open_runtime_menu() {}
+void close_runtime_menu() {}
+void toggle_runtime_menu() {}
+#endif
+
 gbarecomp::RunOptions create_run_options() {
     gbarecomp::RunOptions opts;
     opts.builtin_game_name = GAME_TITLE.data();
     opts.builtin_rom_sha1 = ROM_SHA1_USA.data();
     opts.launcher_region = "USA";
+    opts.launcher_game_config = "game.toml";
 
     // Assist tools: save states, fast-forward, and rewind
     opts.expose_assist_tools = true;
@@ -688,6 +1125,15 @@ gbarecomp::RunOptions create_run_options() {
     opts.launcher_expose_sharp_filter = true;
     opts.launcher_default_sharp_filter = true;
     opts.extended_view_init = &khcom_install_widescreen_adapter;
+    opts.extended_view_frame = [](const gbarecomp::ExtendedViewFrameInfo*) {
+        khcom_update_widescreen_state();
+        auto* bus = gbarecomp::active_bus();
+        if (bus) {
+            uint16_t host = bus->io().host_keyinput();
+            uint16_t modified = khcom::InputEnhancements::instance().process_keyinput(host);
+            bus->io().set_keyinput(modified);
+        }
+    };
 
     // Immediately install widescreen hooks so battle state tracking is active from frame 0
     khcom_install_widescreen_adapter(22, 22);
@@ -699,6 +1145,8 @@ gbarecomp::RunOptions create_run_options() {
     opts.ui_set = ui_set_callback;
     opts.ui_action = ui_action_callback;
     opts.ui_enabled = ui_enabled_callback;
+    opts.ui_get_text = ui_get_text_callback;
+    opts.ui_set_text = ui_set_text_callback;
 
     // Restore saved user configurations across game sessions
     load_khcom_config();
@@ -719,7 +1167,8 @@ RecompRuntimeUi* __wrap_recomp_runtime_ui_create_standard(const RecompRuntimeUiS
     cfg.view_modes = RECOMP_RUNTIME_UI_VIEW_MODE_NATIVE | RECOMP_RUNTIME_UI_VIEW_MODE_FIXED_16_9;
     cfg.native_view_label = "3:2 (Native)";
     cfg.fixed_view_label = "16:9 (Battles only)";
-    return __real_recomp_runtime_ui_create_standard(&cfg);
+    khcom::s_active_runtime_ui = __real_recomp_runtime_ui_create_standard(&cfg);
+    return khcom::s_active_runtime_ui;
 }
 }
 #endif

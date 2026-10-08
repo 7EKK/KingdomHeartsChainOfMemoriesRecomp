@@ -129,21 +129,6 @@ void ScreenFilters::ensure_mask_texture(SDL_Renderer* renderer, ScreenMaskType t
     int tex_w = dest_w;
     int tex_h = dest_h;
 
-    // For repeating patterns with no GBA pixel cell dependency, keep texture small to save VRAM
-    if (type == ScreenMaskType::CrtScanlines) {
-        tex_w = 4;
-        tex_h = 2; // 2 scanlines high
-    } else if (type == ScreenMaskType::SubpixelRgb || type == ScreenMaskType::SubpixelBgr) {
-        tex_w = 3;
-        tex_h = 2;
-    } else if (type == ScreenMaskType::CrtTrinitron) {
-        tex_w = 3;
-        tex_h = 2;
-    } else if (type == ScreenMaskType::LcdDiffusion) {
-        tex_w = 2;
-        tex_h = 2;
-    }
-
     std::vector<uint32_t> pixels(tex_w * tex_h, 0xFFFFFFFF);
 
     const float cell_w = (game_w > 0) ? (static_cast<float>(dest_w) / static_cast<float>(game_w)) : 4.0f;
@@ -268,26 +253,7 @@ void ScreenFilters::render_mask(SDL_Renderer* renderer, const SDL_Rect* viewport
     ensure_mask_texture(renderer, settings_.mask_type, viewport->w, viewport->h, game_w, game_h);
     if (!mask_texture_) return;
 
-    if (settings_.mask_type == ScreenMaskType::LcdGrid) {
-        // Pixel-aligned LCD grid is generated to exact viewport size
-        SDL_RenderCopy(renderer, mask_texture_, nullptr, viewport);
-    } else {
-        // Tiled repeating patterns: render tiles across the viewport
-        int tex_w = 0, tex_h = 0;
-        SDL_QueryTexture(mask_texture_, nullptr, nullptr, &tex_w, &tex_h);
-        if (tex_w <= 0 || tex_h <= 0) return;
-
-        // Tile repeating texture across the exact destination viewport
-        for (int y = viewport->y; y < viewport->y + viewport->h; y += tex_h) {
-            for (int x = viewport->x; x < viewport->x + viewport->w; x += tex_w) {
-                int cur_w = std::min(tex_w, (viewport->x + viewport->w) - x);
-                int cur_h = std::min(tex_h, (viewport->y + viewport->h) - y);
-                SDL_Rect src = { 0, 0, cur_w, cur_h };
-                SDL_Rect dst = { x, y, cur_w, cur_h };
-                SDL_RenderCopy(renderer, mask_texture_, &src, &dst);
-            }
-        }
-    }
+    SDL_RenderCopy(renderer, mask_texture_, nullptr, viewport);
 }
 
 } // namespace khcom

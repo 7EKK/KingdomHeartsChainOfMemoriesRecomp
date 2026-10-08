@@ -1,4 +1,8 @@
 #include "dialogue_backlog.h"
+#include "dialogue_enhancer.h"
+#include "font_resizer.h"
+#include "armv4t/runtime_arm.h"
+#include "cutscene_dialogue_data.inl"
 #include <SDL.h>
 #include <algorithm>
 #include <chrono>
@@ -9,6 +13,74 @@
 namespace khcom {
 
 namespace {
+
+const char* get_speaker_name(uint8_t spk_id, const std::string& text = "") {
+    (void)text;
+    switch (spk_id) {
+        case 0:  return "Sora";
+        case 1:  return "Donald";
+        case 2:  return "Goofy";
+        case 3:  return "Marluxia";
+        case 6:  return "Jiminy Cricket";
+        case 20: return "Larxene";
+        case 24: return "Donald";
+        case 25: return "Goofy";
+        case 26: return "Riku";
+        case 27: return "Riku";
+        case 31: return "Axel";
+        case 32: return "Aerith";
+        case 33: return "Leon";
+        case 37: return "Yuffie";
+        case 38: return "Vexen";
+        case 39: return "Selphie";
+        case 40: return "Tidus";
+        case 41: return "Wakka";
+        case 54: return "Larxene";
+        case 58: return "Marluxia";
+        case 60: return "Naminé";
+        case 62: return "Tutorial";
+        default: return "Dialogue";
+    }
+}
+
+const DialogueLookupEntry* find_cutscene_dialogue(uint32_t ptr) {
+    auto it = std::lower_bound(std::begin(kCutsceneDialogues), std::end(kCutsceneDialogues), ptr,
+        [](const DialogueLookupEntry& e, uint32_t val) {
+            return e.text_ptr < val;
+        });
+    if (it != std::end(kCutsceneDialogues) && it->text_ptr == ptr) {
+        return &(*it);
+    }
+    return nullptr;
+}
+
+
+
+std::string decode_dialogue_string(uint32_t addr) {
+    ScopedInternalBusRead guard;
+    std::string result;
+    result.reserve(128);
+    for (size_t i = 0; i < 512; ++i) {
+        uint16_t c = bus_read_u16(addr + i * 2);
+        if (c == 0 || c == 0xFFFF) break;
+        if (c >= 32 && c <= 126) {
+            result.push_back(static_cast<char>(c));
+        } else if (c == 0x0A) {
+            result.push_back('\n');
+        } else if (c == 0x85) {
+            result += "...";
+        } else if (c == 0x92) {
+            result += "'";
+        } else if (c == 0x93 || c == 0x94) {
+            result += "\"";
+        } else if (c == 0xE9) {
+            result += "é";
+        } else if (c >= 0xE000) {
+            break;
+        }
+    }
+    return result;
+}
 
 // 5x7 ASCII bitmap font (from ASCII 32 to 126)
 const uint8_t kFont5x7[][5] = {
@@ -141,24 +213,60 @@ std::vector<std::string> wrap_text_by_pixels(const std::string& text, int max_pi
 
 } // namespace
 
+static thread_local bool s_internal_bus_read = false;
+
+bool is_internal_bus_read() {
+    return s_internal_bus_read;
+}
+
+void set_internal_bus_read(bool active) {
+    s_internal_bus_read = active;
+}
+
 DialogueBacklog& DialogueBacklog::instance() {
     static DialogueBacklog s_instance;
     return s_instance;
 }
 
-DialogueBacklog::DialogueBacklog() {
-    push_entry("Sora", "Where are we? Donald? Goofy?");
-    push_entry("Donald", "Look over there! What is that huge building?");
-    push_entry("Goofy", "Gawrsh, that sure looks spooky... Could it be Castle Oblivion?");
-    push_entry("Marluxia", "Ahead lies what you seek, but to claim it, you must lose that which you hold dear.");
-    push_entry("Sora", "Lose what we hold dear?! Who are you?");
-    push_entry("Marluxia", "To find is to lose, and to lose is to find. That is the rule here in Castle Oblivion.");
+DialogueBacklog::DialogueBacklog() = default;
+
+void DialogueBacklog::on_bus_read_u16(uint32_t addr) {
+    if (addr < 0x08FBD378u || addr > 0x08FFE504u) {
+        return;
+    }
+
+    // Step 1: Detect start of a cutscene dialogue line
+    if (const auto* match = find_cutscene_dialogue(addr)) {
+        if (addr != last_pushed_text_ptr_) {
+            pending_dialogue_ptr_ = addr;
+            pending_speaker_id_ = match->speaker_id;
+        }
+        return;
+    }
+
+    // Step 2: Confirm active typewriter rendering when sequential character 1 or 2 is read
+    if (pending_dialogue_ptr_ != 0 && (addr == pending_dialogue_ptr_ + 2 || addr == pending_dialogue_ptr_ + 4)) {
+        uint32_t target_ptr = pending_dialogue_ptr_;
+        uint8_t spk_id = pending_speaker_id_;
+        pending_dialogue_ptr_ = 0;
+
+        if (target_ptr != last_pushed_text_ptr_) {
+            std::string dtext = decode_dialogue_string(target_ptr);
+            if (!dtext.empty() && dtext.size() >= 3) {
+                const char* spk_name = get_speaker_name(spk_id, dtext);
+                push_entry(spk_name, dtext);
+                last_pushed_text_ptr_ = target_ptr;
+            }
+        }
+    }
 }
 
 void DialogueBacklog::push_entry(const std::string& speaker, const std::string& text) {
     if (text.empty()) return;
-    if (!entries_.empty() && entries_.back().text == text && entries_.back().speaker == speaker) {
-        return;
+    for (int i = static_cast<int>(entries_.size()) - 1; i >= 0 && i >= static_cast<int>(entries_.size()) - 3; --i) {
+        if (entries_[i].text == text && entries_[i].speaker == speaker) {
+            return;
+        }
     }
 
     auto now = std::chrono::system_clock::now();
@@ -182,6 +290,9 @@ void DialogueBacklog::push_entry(const std::string& speaker, const std::string& 
 void DialogueBacklog::clear() {
     entries_.clear();
     scroll_offset_ = 0;
+    last_pushed_text_ptr_ = 0;
+    pending_dialogue_ptr_ = 0;
+    pending_speaker_id_ = 0;
 }
 
 void DialogueBacklog::toggle_open() {
@@ -231,7 +342,7 @@ bool DialogueBacklog::handle_event(const SDL_Event& event) {
     if (event.type == SDL_QUIT || event.type == SDL_APP_TERMINATING) return false;
 
     if (event.type == SDL_KEYDOWN) {
-        if (event.key.keysym.sym == SDLK_l || event.key.keysym.sym == SDLK_F2) {
+        if (event.key.keysym.sym == SDLK_F2) {
             toggle_open();
             return true;
         }
@@ -318,12 +429,9 @@ void DialogueBacklog::render_sidebar(SDL_Renderer* renderer, int win_w, int win_
     if (!enabled_ || !is_open_ || !renderer || win_w <= 0 || win_h <= 0) return;
 
     // Isolate coordinates: switch out of logical coordinates into raw physical window coordinates
-    int prev_lw = 0, prev_lh = 0;
-    SDL_Rect prev_vp{};
-    SDL_RenderGetLogicalSize(renderer, &prev_lw, &prev_lh);
-    SDL_RenderGetViewport(renderer, &prev_vp);
     SDL_RenderSetLogicalSize(renderer, 0, 0);
     SDL_RenderSetViewport(renderer, nullptr);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
@@ -452,9 +560,75 @@ void DialogueBacklog::render_sidebar(SDL_Renderer* renderer, int win_w, int win_
         SDL_RenderFillRect(renderer, &thumb_rect);
     }
 
-    // Restore original logical size and viewport
-    SDL_RenderSetLogicalSize(renderer, prev_lw, prev_lh);
-    SDL_RenderSetViewport(renderer, &prev_vp);
+    // Ensure clean state at full window coordinates
+    SDL_RenderSetLogicalSize(renderer, 0, 0);
+    SDL_RenderSetViewport(renderer, nullptr);
+    SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+}
+
+namespace gba {
+extern "C" __attribute__((weak)) int (*g_rom_read16_override)(std::uint32_t address,
+                                                              std::uint16_t original_value,
+                                                              std::uint16_t* out_value);
+extern "C" __attribute__((weak)) int (*g_rom_read32_override)(std::uint32_t address,
+                                                              std::uint32_t original_value,
+                                                              std::uint32_t* out_value);
+}
+
+static int khcom_bus_read_hook(uint32_t pc, uint32_t addr, uint32_t width, uint32_t value, uint32_t* overridden) {
+    (void)pc;
+    (void)value;
+
+    if (is_internal_bus_read()) {
+        return 0;
+    }
+
+    int res = 0;
+    if (overridden && FontResizer::instance().intercept_bus_read(addr, width, overridden)) {
+        res = 1;
+    } else if (overridden && DialogueEnhancer::instance().intercept_bus_read(addr, width, overridden)) {
+        res = 1;
+    }
+
+    if (width == 1) {
+        DialogueBacklog::instance().on_bus_read_u16(addr & ~1u);
+    } else if (width == 2) {
+        DialogueBacklog::instance().on_bus_read_u16(addr);
+    } else if (width == 4) {
+        DialogueBacklog::instance().on_bus_read_u16(addr);
+        DialogueBacklog::instance().on_bus_read_u16(addr + 2);
+    }
+    return res;
+}
+
+static int khcom_rom_read16_hook(std::uint32_t addr, std::uint16_t original, std::uint16_t* overridden) {
+    if (is_internal_bus_read()) return 0;
+    uint32_t val = original;
+    if (FontResizer::instance().intercept_bus_read(addr, 2, &val)) {
+        *overridden = static_cast<uint16_t>(val);
+        return 1;
+    }
+    return 0;
+}
+
+static int khcom_rom_read32_hook(std::uint32_t addr, std::uint32_t original, std::uint32_t* overridden) {
+    if (is_internal_bus_read()) return 0;
+    uint32_t val = original;
+    if (FontResizer::instance().intercept_bus_read(addr, 4, &val)) {
+        *overridden = val;
+        return 1;
+    }
+    return 0;
+}
+
+void khcom_install_backlog_hook() {
+    g_runtime_bus_read_override = &khcom_bus_read_hook;
+    if (&gba::g_rom_read16_override && gba::g_rom_read16_override != &khcom_rom_read16_hook) {
+        gba::g_rom_read16_override = &khcom_rom_read16_hook;
+    }
+    if (&gba::g_rom_read32_override && gba::g_rom_read32_override != &khcom_rom_read32_hook) {
+        gba::g_rom_read32_override = &khcom_rom_read32_hook;
+    }
 }
 
 } // namespace khcom

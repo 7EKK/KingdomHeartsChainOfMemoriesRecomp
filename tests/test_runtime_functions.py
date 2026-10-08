@@ -24,11 +24,21 @@ CONFIG_SCHEMA = {
     },
     "Dialogue": {
         "font_density": {"type": int, "min": 0, "max": 2, "default": 1},
+        "font_scale": {"type": int, "min": 0, "max": 3, "default": 2},
+        "font_style": {"type": int, "min": 0, "max": 2, "default": 1},
+        "line_capacity": {"type": int, "min": 0, "max": 2, "default": 1},
         "soft_word_wrap": {"type": int, "min": 0, "max": 1, "default": 1},
         "backlog_enable": {"type": int, "min": 0, "max": 1, "default": 1},
     },
     "Controls": {
         "analog_mode": {"type": int, "min": 0, "max": 2, "default": 1},
+        "analog_deadzone": {"type": int, "min": 5, "max": 50, "default": 18},
+        "gamepad_profile": {"type": int, "min": 0, "max": 5, "default": 0},
+        "pad_attack": {"type": int, "min": 0, "max": 7, "default": 0},
+        "pad_jump": {"type": int, "min": 0, "max": 7, "default": 1},
+        "pad_deck_l": {"type": int, "min": 0, "max": 7, "default": 4},
+        "pad_deck_r": {"type": int, "min": 0, "max": 7, "default": 5},
+        "kb_preset": {"type": int, "min": 0, "max": 4, "default": 0},
     },
     "Gameplay": {
         "turbo_dialog": {"type": int, "min": 0, "max": 1, "default": 0},
@@ -60,11 +70,21 @@ limiter=1
 
 [Dialogue]
 font_density=1
+font_scale=2
+font_style=1
+line_capacity=1
 soft_word_wrap=1
 backlog_enable=1
 
 [Controls]
 analog_mode=2
+analog_deadzone=18
+gamepad_profile=0
+pad_attack=0
+pad_jump=1
+pad_deck_l=4
+pad_deck_r=5
+kb_preset=0
 
 [Gameplay]
 turbo_dialog=1
@@ -77,7 +97,7 @@ perf_theme=0
 
 def test_config_keys_count():
     total_keys = sum(len(keys) for keys in CONFIG_SCHEMA.values())
-    assert total_keys == 22, f"Expected exactly 22 options, found {total_keys}"
+    assert total_keys == 32, f"Expected exactly 32 options, found {total_keys}"
     print(f"[PASS] Total runtime configuration options count verified: {total_keys} keys")
 
 def test_ini_deserialization():
@@ -93,7 +113,7 @@ def test_ini_deserialization():
             assert spec["min"] <= val <= spec["max"], f"Value {val} for '{key}' out of range [{spec['min']}, {spec['max']}]"
             parsed_count += 1
             
-    assert parsed_count == 22
+    assert parsed_count == 32
     print(f"[PASS] INI serialization and deserialization verified for all {parsed_count} options")
 
 def should_merge_newline_py(prev_char, next_char, soft_wrap=True, case_aware=True):
@@ -146,6 +166,14 @@ def test_dialogue_enhancer_logic():
     assert "seek,\nbut" not in processed2, "Continuation after comma with lowercase should merge newline into single space"
     assert "seek, but" in processed2, "Text should contain merged 'seek, but'"
 
+    # Donald in-game dialogue case (verifying "magic!" merges onto line 2 in compact/high-density)
+    raw_donald = "It must be a Heartless!\nLet's see how it handles my\nmagic!"
+    proc_donald_orig = process_dialogue_text_py(raw_donald, max_len=26)
+    assert "handles my\nmagic!" in proc_donald_orig, "Original 26 char width should preserve authentic 3-line GBA layout"
+
+    proc_donald_compact = process_dialogue_text_py(raw_donald, max_len=34)
+    assert "handles my magic!" in proc_donald_compact, "Compact 34 char width must merge 'magic!' onto line 2"
+
     print("[PASS] Dialogue enhancer soft word-wrapping grammar heuristics verified")
 
 def wrap_text_py(text, max_px, scale=1):
@@ -179,11 +207,11 @@ def test_dialogue_backlog_word_wrap():
     print(f"[PASS] Dialogue backlog wrapping verified: '{text[:25]}...' split into {len(wrapped)} lines")
 
 def test_screen_filter_aspect_invalidation():
-    aspects = [(240, 160), (256, 160), (284, 160), (480, 160), (576, 160)]
+    aspects = [(240, 160), (284, 160)]
     for w, h in aspects:
         ratio = w / h
         assert ratio >= 1.5, f"Invalid aspect ratio {ratio} for {w}x{h}"
-    print("[PASS] Aspect ratio coordinate dimensions verified for all 5 viewport expansion modes")
+    print("[PASS] Aspect ratio coordinate dimensions verified for authentic 3:2 and 16:9 viewport modes")
 
 def test_ram_overlay_dispatch_coverage():
     import os
@@ -548,6 +576,41 @@ def test_text_resizing_pipeline():
 
     print("[PASS] Text resizing pipeline: bytecode roundtrip, wrap recalculation, and 9-slice box geometry verified")
 
+def test_cutscene_dialogue_bounds_and_lengths():
+    import os
+    import re
+
+    inl_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "cutscene_dialogue_data.inl")
+    assert os.path.exists(inl_path), f"File not found: {inl_path}"
+
+    with open(inl_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    entries = re.findall(r"\{\s*(0x[0-9A-Fa-f]+)u,\s*(\d+),\s*(\d+)\s*\}", content)
+    assert len(entries) >= 1000, f"Expected at least 1000 dialogue entries, got {len(entries)}"
+
+    parsed = []
+    for p_str, len_str, spk_str in entries:
+        parsed.append((int(p_str, 16), int(len_str), int(spk_str)))
+
+    # Verify sorting and zero overlap
+    for i in range(len(parsed) - 1):
+        a1, l1, _ = parsed[i]
+        a2, _, _ = parsed[i+1]
+        assert a1 < a2, f"Entries not strictly ordered: 0x{a1:08X} >= 0x{a2:08X}"
+        assert a1 + l1 <= a2, f"Overlap detected between 0x{a1:08X} (len {l1}) and 0x{a2:08X}"
+        assert 6 <= l1 <= 400, f"Unreasonable length {l1} for dialogue at 0x{a1:08X}"
+
+    # Specifically verify Marluxia dialogue boundary vs Traverse Town script table
+    # Marluxia line is at 0x08FBDF74, length 132 bytes (ends at 0x08FBDFF8)
+    # The cutscene event table starts at 0x08FBE000
+    marluxia_entry = next((e for e in parsed if e[0] == 0x08FBDF74), None)
+    assert marluxia_entry is not None, "Marluxia dialogue entry 0x08FBDF74 missing"
+    assert marluxia_entry[1] == 132, f"Expected Marluxia len 132, got {marluxia_entry[1]}"
+    assert marluxia_entry[0] + marluxia_entry[1] <= 0x08FBE000, "Marluxia bounds overlap with cutscene script table at 0x08FBE000"
+
+    print("[PASS] Cutscene dialogue bounds & lengths verified: exact byte ranges prevent script table interception")
+
 if __name__ == "__main__":
     test_config_keys_count()
     test_ini_deserialization()
@@ -566,6 +629,8 @@ if __name__ == "__main__":
     test_savestate_thumbnail_headers()
     test_perf_hud_options()
     test_text_resizing_pipeline()
+    test_cutscene_dialogue_bounds_and_lengths()
     print()
-    print("ALL 17 AUTOMATED VERIFICATION SUITES PASSED SUCCESSFULLY.")
+    print("ALL 18 AUTOMATED VERIFICATION SUITES PASSED SUCCESSFULLY.")
+
 

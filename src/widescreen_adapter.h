@@ -3,6 +3,20 @@
 #include <cstdint>
 #include <SDL2/SDL.h>
 
+/**
+ * Adaptive Widescreen Architecture for Kingdom Hearts: Chain of Memories
+ * 
+ * Note on 16:9 Scope:
+ * True 16:9 widescreen expansion (284x160) is active exclusively during combat arenas:
+ * 1. Battles utilize continuous cylindrical 360-degree background tilemaps (BG2/BG3)
+ *    in VRAM that wrap horizontally, revealing real arena geometry without visual voids.
+ * 2. Room exploration (overworld) maps are strictly authored for 240x160 with viewport-edge
+ *    entity culling. Expanding the horizontal view exposes unfinished map voids, tile
+ *    glitches, and spawning Heartless enemies.
+ * 3. Menus, UI dialogs, and story cutscenes are choreographed for 240x160. Clean 3:2
+ *    pillarboxing preserves exact 1:1 square pixel geometry and prevents sprite distortion.
+ */
+
 extern "C" {
 int khcom_tilemap_provider(int bg, int hw_x, int screen_y, uint16_t* out_entry);
 int khcom_bg_x_provider(int bg, int output_x, int screen_y, int* out_hw_x);
@@ -12,6 +26,7 @@ void khcom_update_widescreen_state();
 bool khcom_is_battle_active();
 void khcom_set_battle_active(bool active);
 void khcom_widescreen_notify_present();
+uint64_t khcom_get_frame_counter();
 void khcom_compute_effective_viewport(int tex_w, int tex_h, int win_w, int win_h,
                                       SDL_Rect* out_src, SDL_Rect* out_dst,
                                       int* out_base_w, int* out_base_h);

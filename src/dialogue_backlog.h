@@ -36,6 +36,12 @@ public:
     // Render the left-docked translucent glassmorphic sidebar
     void render_sidebar(SDL_Renderer* renderer, int win_w, int win_h);
 
+    // Real-time bus read observer: captures active cutscene dialogue characters as they are rendered
+    void on_bus_read_u16(uint32_t addr);
+
+    // Backward-compatible empty hook
+    void check_fn_entry_dialogue() {}
+
     const std::vector<DialogueEntry>& entries() const { return entries_; }
 
 private:
@@ -50,8 +56,21 @@ private:
     int max_scroll_ = 0;
     int cached_win_w_ = 1024;
     int cached_bar_w_ = 400;
+    uint32_t last_pushed_text_ptr_ = 0;
+    uint32_t pending_dialogue_ptr_ = 0;
+    uint8_t pending_speaker_id_ = 0;
 
     std::vector<DialogueEntry> entries_;
+};
+
+void khcom_install_backlog_hook();
+
+bool is_internal_bus_read();
+void set_internal_bus_read(bool active);
+
+struct ScopedInternalBusRead {
+    ScopedInternalBusRead() { set_internal_bus_read(true); }
+    ~ScopedInternalBusRead() { set_internal_bus_read(false); }
 };
 
 } // namespace khcom

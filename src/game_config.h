@@ -12,5 +12,11 @@ inline constexpr std::string_view ROM_SHA1_USA = "10729bd884f8fdca7a310b6d606c52
 inline constexpr std::size_t ROM_SIZE_USA = 33554432;
 
 gbarecomp::RunOptions create_run_options();
+bool is_runtime_menu_open();
+void open_runtime_menu();
+void close_runtime_menu();
+void toggle_runtime_menu();
+void save_khcom_config();
+void load_khcom_config();
 
 }

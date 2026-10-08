@@ -1,5 +1,8 @@
 #include "widescreen_adapter.h"
 #include "hud_anchoring.h"
+#include "dialogue_backlog.h"
+#include "input_enhancements.h"
+#include "armv4t/runtime_arm.h"
 #include <algorithm>
 
 extern "C" {
@@ -18,6 +21,7 @@ extern unsigned g_ws_extra_left;
 extern unsigned g_ws_extra_right;
 extern unsigned g_ws_view_width;
 extern void (*g_runtime_fn_entry_hook)(uint32_t entry_pc);
+uint32_t bus_read_u32(uint32_t addr);
 }
 
 namespace {
@@ -29,65 +33,132 @@ uint64_t s_last_battle_frame = 0;
 uint64_t s_last_non_battle_frame = 0;
 void (*s_prev_fn_entry_hook)(uint32_t entry_pc) = nullptr;
 
+inline bool is_battle_mode(uint32_t mode_or_desc) {
+    const uint32_t m = mode_or_desc & ~1u;
+    if (m == 0) return false;
+
+    // 1. Battle Mode Descriptor Tables in ROM (0x09xxxxxx)
+    if (m == 0x09ECEB40u || // Single-player combat arena descriptor
+        m == 0x09ED9B98u || // VS multiplayer combat arena descriptor
+        m == 0x09EF1308u || // SIO wireless battle connect descriptor
+        m == 0x09EF14DCu || // SIO wireless battle option descriptor
+        m == 0x09EF14ECu) { // SIO wireless battle cardget descriptor
+        return true;
+    }
+
+    // 2. Battle Mode Functions in ROM (0x08xxxxxx)
+    if (m == 0x080099D0u || m == 0x0800A4BCu || // mode_battle_0, mode_battle_1
+        m == 0x0800C428u || m == 0x0800C5F8u || // mode_vsbattle_0, mode_vsbattle_1
+        (m >= 0x080AEBA0u && m <= 0x080B1844u && // mode_sio_btl_*
+         m != 0x080AEE24u && m != 0x080B04F0u && m != 0x080B1844u)) {
+        return true;
+    }
+
+    // 3. If m is a pointer to a descriptor table in ROM, check table function entries
+    if (m >= 0x08000000u && m < 0x09FFFFF0u) {
+        const uint32_t fn1 = bus_read_u32(m + 4) & ~1u;
+        const uint32_t fn2 = bus_read_u32(m + 8) & ~1u;
+        if (fn1 == 0x080099D0u || fn2 == 0x0800A4BCu ||
+            fn1 == 0x0800C428u || fn2 == 0x0800C5F8u ||
+            fn1 == 0x080AEBA0u || fn1 == 0x080AEF38u || fn1 == 0x080B1498u) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+inline bool is_non_battle_mode(uint32_t mode_or_desc) {
+    const uint32_t m = mode_or_desc & ~1u;
+    if (m == 0) return false;
+    if (is_battle_mode(m)) return false;
+
+    // Explicit non-battle descriptors in ROM
+    if (m == 0x09ECEB50u || m == 0x09ECEB54u || // mode_chkbtl (room / field exploration)
+        m == 0x09ECEB64u ||                     // room transition / debug
+        m == 0x09ED9B78u || m == 0x09ED9B88u || // vs setup / menu
+        m == 0x09EDE430u ||                     // mode_jiminy (Jiminy's journal)
+        m == 0x09EDE4D0u ||                     // mode_movie (story cutscenes)
+        m == 0x09EE47ACu ||                     // mode_eventselect
+        m == 0x09EF4DB0u ||                     // mode_allmap (world map)
+        m == 0x09EF4E50u ||                     // mode_title (title screen)
+        m == 0x09EF4EC0u || m == 0x09EF4ED0u || // mode_copyright1 & 2
+        m == 0x09EFA9C4u) {                     // mode_StaffRoll (credits)
+        return true;
+    }
+
+    // Any valid ROM address that is not a battle mode is non-battle
+    if (m >= 0x08000000u && m < 0x0A000000u) {
+        return true;
+    }
+
+    return false;
+}
+
 void khcom_fn_entry_hook(uint32_t pc) {
     if (s_prev_fn_entry_hook) {
         s_prev_fn_entry_hook(pc);
     }
 
-    // Battle / combat modes: 16:9 True Widescreen
-    const bool is_battle_entry =
-        (pc >= 0x080099D0u && pc < 0x0800A5A4u) ||  // mode_battle_0, mode_battle_1
-        (pc >= 0x0800A608u && pc < 0x0800AB80u) ||  // mode_chkbtl_0, mode_chkbtl_1
-        (pc >= 0x0800C428u && pc < 0x0800C678u) ||  // mode_vsbattle_0, mode_vsbattle_1
-        (pc >= 0x0801D228u && pc <= 0x08031B64u) || // task_btl_* routines
-        (pc >= 0x0803FDFCu && pc <= 0x08040C70u) || // task_btl_form_*, btl_born, btl_raid, btl_badstatus
-        (pc >= 0x08040E28u && pc <= 0x08045404u) || // task_smn_* (Battle summons: Cloud, Simba, etc.)
-        (pc >= 0x08045550u && pc <= 0x08049D88u) || // task_frd_* (Battle friend cards: Donald, Goofy, etc.)
-        (pc >= 0x0804A014u && pc <= 0x08059DD0u) || // task_hum_* (Battle humanoid bosses: Axel, Larxene, etc.)
-        (pc >= 0x0805CC80u && pc <= 0x0805DA34u) || // task_btl_pop_cb_*, btl_exp, btl_vslockon, btl_hpoth
-        (pc >= 0x080B9660u && pc <= 0x080BCE78u) || // task_bos_tm_* (Trickmaster boss)
-        (pc >= 0x080BCE8Cu && pc <= 0x080C1A30u) || // task_bos_jf_* (Jafar boss)
-        (pc >= 0x080C1B60u && pc <= 0x080C51C0u) || // task_bos_dsd_* (Darkside boss)
-        (pc >= 0x080D9B90u && pc <= 0x080DB954u) || // task_bos_boogie_* (Oogie Boogie boss)
-        (pc >= 0x080DC640u && pc <= 0x080DDDD8u) || // task_bos_ursula_* (Ursula boss)
-        (pc >= 0x080FB608u && pc <= 0x080FB890u) || // task_bos_ga_* (Guard Armor boss)
-        (pc >= 0x080FC444u && pc <= 0x080FD9A0u) || // task_bos_md_* (Maleficent Dragon boss)
-        (pc >= 0x0810A580u && pc <= 0x0810C29Cu) || // task_bos_pc_* (Parasite Cage boss)
-        (pc >= 0x0810FF7Cu && pc <= 0x0811259Cu) || // task_bos_lst_* (Marluxia final boss)
-        (pc >= 0x080AEBA0u && pc <= 0x080B1844u) || // mode_sio_btl_* (Multiplayer battle)
-        (pc >= 0x02038738u && pc <= 0x0203875Au) || // RAM overlay battle routines
-        (pc >= 0x03000000u && pc <= 0x03007000u);   // RAM overlay battle routines in IWRAM
+    // Fast reject for addresses outside GBA code ranges
+    const uint32_t top = pc >> 24;
+    if (top != 0x08 && top != 0x02 && top != 0x03) {
+        return;
+    }
 
-    // Non-battle modes: Authentic 3:2 view (Pillarboxed)
-    const bool is_non_battle_entry =
-        (pc == 0x0800A5A4u) ||                       // mode_battle_2 (battle cleanup/exit)
-        (pc == 0x0800AB80u) ||                       // mode_chkbtl_2 (battle check exit)
-        (pc == 0x0800C678u) ||                       // mode_vsbattle_2 (vs battle exit)
-        (pc >= 0x08032070u && pc <= 0x08036BE4u) || // task_fld_* (Field Sora, Riku, Overworld/Rooms)
-        (pc >= 0x08036BFCu && pc <= 0x0803F008u) || // task_emy_* (Field enemies wandering)
-        (pc >= 0x0803F254u && pc <= 0x0803FDBCu) || // task_roomcreate_*, task_romcri_eff_* (World Room creation)
+    // 1. Central mode switch calls (gf_func_080010CC and gf_func_080010E0)
+    // R0 contains the target mode descriptor pointer
+    if (pc == 0x080010CCu || pc == 0x080010E0u) {
+        const uint32_t target_mode = g_cpu.R[0];
+        if (is_battle_mode(target_mode)) {
+            s_is_battle = true;
+            s_is_menu = false;
+            s_last_battle_frame = s_frame_counter;
+            if (g_ws_active && g_ws_view_width > 240) {
+                g_ws_pillarbox = 0;
+            }
+        } else if (is_non_battle_mode(target_mode)) {
+            s_is_battle = false;
+            s_is_menu = true;
+            s_last_non_battle_frame = s_frame_counter;
+            g_ws_pillarbox = 1;
+        }
+        return;
+    }
+
+    // 2. Direct execution of mode handlers
+    const bool is_battle_mode_func =
+        (pc == 0x080099D0u || pc == 0x0800A4BCu ||  // mode_battle_0, mode_battle_1 (Single-player arena)
+         pc == 0x0800C428u || pc == 0x0800C5F8u ||  // mode_vsbattle_0, mode_vsbattle_1 (VS battle arena)
+         (pc >= 0x080AEBA0u && pc <= 0x080B1844u &&  // mode_sio_btl_* (Wireless multiplayer battle)
+          pc != 0x080AEE24u && pc != 0x080B04F0u && pc != 0x080B1844u));
+
+    const bool is_battle_exit_func =
+        (pc == 0x0800A5A4u ||                       // mode_battle_2 (single-player battle exit/cleanup)
+         pc == 0x0800C678u ||                       // mode_vsbattle_2 (vs battle exit/cleanup)
+         pc == 0x080AEE24u || pc == 0x080B04F0u || pc == 0x080B1844u); // sio battle exit
+
+    const bool is_non_battle_func =
+        (pc >= 0x0800A608u && pc <= 0x0800AB80u) || // mode_chkbtl_* (Field room exploration)
+        (pc >= 0x0800AC34u && pc <= 0x0800B2E4u) || // mode_debug_*
         (pc >= 0x0805ACE4u && pc <= 0x0805C910u) || // mode_jiminy_* (Jiminy's Journal)
-        (pc >= 0x0805DB38u && pc <= 0x0805E824u) || // task_tutorial_* (Tutorial prompts)
-        (pc >= 0x0805E8B4u && pc <= 0x0805F0D8u) || // mode_movie_* (Cutscenes / FMV)
+        (pc >= 0x0805E8B4u && pc <= 0x0805F0D8u) || // mode_movie_* (Cutscenes)
         (pc >= 0x080750D4u && pc <= 0x08075354u) || // mode_eventselect_*
-        (pc >= 0x080B3F80u && pc <= 0x080B7E50u) || // mode_wLogo_*, task_wLogo_* (World Logo intro)
-        (pc >= 0x080C85C4u && pc <= 0x080D2BC4u) || // task_poo_* (100 Acre Wood mini-games)
-        (pc >= 0x080D31C4u && pc <= 0x080D4CF8u) || // mode_allmap_*, task_allmap_* (World Map)
-        (pc >= 0x080D5B70u && pc <= 0x080D6FFCu) || // mode_title_*, task_title_* (Title Screen)
-        (pc >= 0x080D7014u && pc <= 0x080D7288u) || // mode_copyright1_*, mode_copyright2_* (Copyright screens)
-        (pc >= 0x080D7410u && pc <= 0x080D8B54u) || // mode_status_*, task_status_* (Pause / Status / Deck Menu)
-        (pc >= 0x080F7BF8u && pc <= 0x080F7DB0u) || // task_room_name_* (Room name display)
-        (pc >= 0x080FFC0Cu && pc <= 0x08109AA0u) || // mode_worldinspect_*, mode_ms_* (Card shop & inspection)
-        (pc >= 0x08112B3Cu && pc <= 0x08115484u);   // mode_StaffRoll_*, task_sroll_* (Credits)
+        (pc >= 0x080D31C4u && pc <= 0x080D4CF8u) || // mode_allmap_* (World Map)
+        (pc >= 0x080D5B70u && pc <= 0x080D6FFCu) || // mode_title_* (Title Screen)
+        (pc >= 0x080D7014u && pc <= 0x080D7288u) || // mode_copyright1_*, mode_copyright2_*
+        (pc >= 0x080D7410u && pc <= 0x080D8B54u) || // mode_status_* (Pause / Status / Deck Menu)
+        (pc >= 0x080FFC0Cu && pc <= 0x08109AA0u) || // mode_worldinspect_*, mode_ms_* (Card shop)
+        (pc >= 0x08112B3Cu && pc <= 0x08115484u);   // mode_StaffRoll_* (Credits)
 
-    if (is_battle_entry) {
+    if (is_battle_mode_func) {
         s_is_battle = true;
         s_is_menu = false;
         s_last_battle_frame = s_frame_counter;
         if (g_ws_active && g_ws_view_width > 240) {
             g_ws_pillarbox = 0; // True widescreen in battle arena
         }
-    } else if (is_non_battle_entry) {
+    } else if (is_battle_exit_func || is_non_battle_func) {
         s_is_battle = false;
         s_is_menu = true;
         s_last_non_battle_frame = s_frame_counter;
@@ -132,29 +203,8 @@ int khcom_bg_x_provider(int bg, int output_x, int screen_y, int* out_hw_x) {
         return 0;
     }
 
-    if (bg == 0) {
-        // Dialogue and message text boxes stay centered in 240px; never bleed into margins
-        if (in_margin) {
-            return -1;
-        }
-        return 0;
-    }
-
-    if (bg == 1) {
-        // UI layer: in battle only, if WidescreenAnchored is active, sample corners into margins
-        const auto anchor_mode = khcom::HudAnchoring::instance().settings().mode;
-        if (!s_is_menu && s_is_battle && anchor_mode == khcom::HudAnchorMode::WidescreenAnchored) {
-            if (in_left_margin && screen_y < 48) {
-                *out_hw_x = std::clamp(output_x, 0, 80);
-                return 1;
-            }
-            if (in_right_margin && screen_y >= 96) {
-                *out_hw_x = std::clamp(output_x - extra, 140, 239);
-                return 1;
-            }
-        }
-
-        // Never bleed dialogue or HUD text into margins, but never punch holes inside native screen
+    if (bg == 0 || bg == 1) {
+        // Dialogue windows and UI layers stay centered in 240px; never bleed into margins
         if (in_margin) {
             return -1;
         }
@@ -171,7 +221,6 @@ int khcom_bg_x_provider(int bg, int output_x, int screen_y, int* out_hw_x) {
 
 int khcom_obj_attr_x_provider(int oam_index, uint16_t attr0, uint16_t attr1, uint16_t attr2, int* out_x) {
     (void)oam_index;
-    (void)attr2;
     if (!out_x || !g_ws_active) {
         return 0;
     }
@@ -179,8 +228,8 @@ int khcom_obj_attr_x_provider(int oam_index, uint16_t attr0, uint16_t attr1, uin
     const int raw_x = static_cast<int>(attr1 & 0x1FFu);
     const int sx = (raw_x >= 256) ? (raw_x - 512) : raw_x;
 
-    // Never displace sprites outside of battle
-    if (!s_is_battle) {
+    // Never displace sprites outside of battle or in menus/cutscenes
+    if (!s_is_battle || s_is_menu) {
         if (raw_x >= 256) {
             *out_x = sx;
             return 1;
@@ -193,11 +242,29 @@ int khcom_obj_attr_x_provider(int oam_index, uint16_t attr0, uint16_t attr1, uin
     if (!s_is_menu && s_is_battle && anchor_mode == khcom::HudAnchorMode::WidescreenAnchored) {
         const int raw_y = static_cast<int>(attr0 & 0xFFu);
         const int sy = (raw_y >= 160) ? (raw_y - 256) : raw_y;
-        if (sx >= -16 && sx <= 85 && sy >= 0 && sy <= 45) {
+
+        const uint16_t shape = (attr0 & 0xC000u);
+        const uint16_t size  = (attr1 & 0xC000u);
+        const int priority = static_cast<int>((attr2 >> 10) & 0x03u);
+
+        // Text glyph sprites in KH:CoM are strictly 16x16 square sprites with Priority 0.
+        // Dialogue text, message windows, and font glyphs must NEVER be displaced into margins.
+        const bool is_16x16_square = (shape == 0x0000u) && (size == 0x4000u);
+
+        // Authentic player HP gauge sprites (btl_hpply.c):
+        // - Priority is strictly 1 (SPRITE_PRIORITY(1))
+        // - Top-left health bar region: sy in [0, 14], sx in [-16, 85]
+        // - None of the HP gauge sprites are 16x16 square (Sora face is 32x32, bar pieces are 32x8/32x16/16x8)
+        if (!is_16x16_square && priority == 1 && sx >= -16 && sx <= 85 && sy >= 0 && sy <= 14) {
             *out_x = sx - static_cast<int>(g_ws_extra_left);
             return 1;
         }
-        if (sx >= 130 && sx <= 250 && sy >= 90 && sy <= 160) {
+
+        // Authentic enemy HP gauge sprites (btl_hpenm.c):
+        // - Priority is strictly 1 (SPRITE_PRIORITY(1))
+        // - Top-right health bar region: sy in [0, 14], sx in [160, 250]
+        // - Gauge pieces are horizontal (32x8 / 32x16)
+        if (!is_16x16_square && priority == 1 && sx >= 160 && sx <= 250 && sy >= 0 && sy <= 14) {
             *out_x = sx + static_cast<int>(g_ws_extra_right);
             return 1;
         }
@@ -222,6 +289,8 @@ void khcom_install_widescreen_adapter(uint32_t extra_left, uint32_t extra_right)
     g_ws_obj_native_clip = 0;
     g_ws_pillarbox = (s_is_battle && g_ws_active && g_ws_view_width > 240) ? 0 : 1;
 
+    khcom::khcom_install_backlog_hook();
+
     if (g_runtime_fn_entry_hook != &khcom_fn_entry_hook) {
         s_prev_fn_entry_hook = g_runtime_fn_entry_hook;
         g_runtime_fn_entry_hook = &khcom_fn_entry_hook;
@@ -229,6 +298,7 @@ void khcom_install_widescreen_adapter(uint32_t extra_left, uint32_t extra_right)
 }
 
 void khcom_update_widescreen_state() {
+    khcom_is_battle_active();
     g_ws_tilemap_provider = &khcom_tilemap_provider;
     g_ws_bg_x_provider = &khcom_bg_x_provider;
     g_ws_bg_x_provider_layers = 0xFu;
@@ -236,17 +306,28 @@ void khcom_update_widescreen_state() {
     g_ws_authored_margin_layers = 1;
     g_ws_obj_native_clip = 0;
     g_ws_pillarbox = (s_is_battle && g_ws_active && g_ws_view_width > 240) ? 0 : 1;
+    khcom::khcom_install_backlog_hook();
+
+    if (g_runtime_fn_entry_hook != &khcom_fn_entry_hook) {
+        s_prev_fn_entry_hook = g_runtime_fn_entry_hook;
+        g_runtime_fn_entry_hook = &khcom_fn_entry_hook;
+    }
 }
 
 bool khcom_is_battle_active() {
-    // If battle state is true, but no battle PC has been observed for over 30 frames
-    // while non-battle PCs have been observed, auto-fall back to false (clean heartbeat).
-    if (s_is_battle && s_frame_counter > s_last_battle_frame + 30 &&
-        s_last_non_battle_frame > s_last_battle_frame) {
-        s_is_battle = false;
-        s_is_menu = true;
-        g_ws_pillarbox = 1;
+    // 1. Authoritative check: active and pending mode descriptors in GBA IWRAM (0x03007488 / 0x03007494)
+    const uint32_t active_mode = bus_read_u32(0x03007488u);
+    const uint32_t pending_mode = bus_read_u32(0x03007494u);
+
+    if (active_mode != 0 || pending_mode != 0) {
+        const bool mode_is_battle = is_battle_mode(active_mode) || is_battle_mode(pending_mode);
+        s_is_battle = mode_is_battle;
+        s_is_menu = !mode_is_battle;
+        g_ws_pillarbox = (mode_is_battle && g_ws_active && g_ws_view_width > 240) ? 0 : 1;
+        return s_is_battle;
     }
+
+    // 2. Fallback check for unit tests or early boot before IWRAM mode is set
     return s_is_battle;
 }
 
@@ -268,35 +349,42 @@ void khcom_widescreen_notify_present() {
     ++s_frame_counter;
 }
 
+uint64_t khcom_get_frame_counter() {
+    return s_frame_counter;
+}
+
 void khcom_compute_effective_viewport(int tex_w, int tex_h, int win_w, int win_h,
                                       SDL_Rect* out_src, SDL_Rect* out_dst,
                                       int* out_base_w, int* out_base_h) {
     if (!out_src || !out_dst || tex_w <= 0 || tex_h <= 0 || win_w <= 0 || win_h <= 0) return;
 
-    const bool is_284 = (tex_w % 284 == 0) && (tex_h % 160 == 0) && (tex_w / 284 == tex_h / 160);
-    const int factor = is_284 ? (tex_w / 284) : (tex_h / 160 > 0 ? (tex_h / 160) : 1);
+    const bool is_expanded = (tex_w * 2 > tex_h * 3);
+    const int factor = (tex_h / 160 > 0) ? (tex_h / 160) : 1;
+    const int base_w_val = tex_w / factor;
     const bool in_battle = khcom_is_battle_active();
 
-    if (is_284 && in_battle) {
-        // Mode 16:9 during battle arena: render full wide texture into 16:9 layout
+    if (is_expanded && in_battle) {
+        // Mode 16:9 during battle arena: render full wide texture into wide layout
         out_src->x = 0;
         out_src->y = 0;
         out_src->w = tex_w;
         out_src->h = tex_h;
 
-        if (out_base_w) *out_base_w = 284;
+        if (out_base_w) *out_base_w = base_w_val;
         if (out_base_h) *out_base_h = 160;
 
-        float s = std::min(static_cast<float>(win_w) / 284.0f, static_cast<float>(win_h) / 160.0f);
-        int dw = static_cast<int>(284.0f * s);
+        float s = std::min(static_cast<float>(win_w) / static_cast<float>(base_w_val),
+                           static_cast<float>(win_h) / 160.0f);
+        int dw = static_cast<int>(static_cast<float>(base_w_val) * s);
         int dh = static_cast<int>(160.0f * s);
         out_dst->x = (win_w - dw) / 2;
         out_dst->y = (win_h - dh) / 2;
         out_dst->w = dw;
         out_dst->h = dh;
-    } else if (is_284 && !in_battle) {
-        // Mode 16:9 outside battle: crop central authentic 240x160 area and fit to 3:2 layout
-        out_src->x = 22 * factor;
+    } else if (is_expanded && !in_battle) {
+        // Mode 16:9 outside battle: crop central authentic 240x160 area and fit to authentic 3:2 layout
+        const int margin_left = (base_w_val - 240) / 2;
+        out_src->x = margin_left * factor;
         out_src->y = 0;
         out_src->w = 240 * factor;
         out_src->h = 160 * factor;

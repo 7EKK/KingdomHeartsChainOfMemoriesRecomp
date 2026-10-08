@@ -1,25 +1,178 @@
 #include "font_resizer.h"
+#include "dialogue_backlog.h"
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+
+extern "C" uint16_t bus_read_u16(uint32_t addr);
 
 namespace khcom {
 
 namespace {
 
-// Standard GBA KH:CoM proportional width table for ASCII 32 (' ') to 126 ('~')
-const uint8_t kBaseAsciiWidths[95] = {
-    4, // ' '
-    3, 4, 7, 6, 7, 7, 3, 4, 4, 5, 6, 3, 5, 3, 5, // '!' through '/'
-    6, 5, 6, 6, 6, 6, 6, 6, 6, 6,                 // '0' through '9'
-    3, 3, 5, 6, 5, 5, 7,                          // ':' through '@'
-    7, 6, 6, 6, 6, 6, 7, 6, 4, 6, 6, 6, 8, 7, 7, // 'A' through 'O'
-    6, 7, 6, 6, 6, 6, 7, 8, 7, 6, 6,              // 'P' through 'Z'
-    4, 5, 4, 6, 6, 4,                             // '[' through '`'
-    6, 6, 5, 6, 5, 5, 6, 6, 3, 4, 5, 3, 8, 6, 6, // 'a' through 'o'
-    6, 6, 5, 5, 5, 6, 6, 8, 6, 6, 5,              // 'p' through 'z'
-    4, 3, 4, 7                                    // '{' through '~'
+// Authentic GBA KH:CoM Latin glyph advance widths from ROM (0x08F7D438 - 0x08F7D638)
+static const uint16_t kRomLatinGlyphWidths[256] = {
+    0, 4, 4, 5, 5, 6, 8, 8, 8, 6, 6, 6, 8, 8, 8, 8,
+    8, 8, 7, 8, 8, 8, 8, 8, 6, 12, 0, 0, 0, 0, 0, 0,
+    3, 2, 5, 8, 6, 7, 7, 3, 4, 4, 6, 6, 3, 6, 3, 5,
+    6, 4, 6, 6, 6, 6, 6, 6, 6, 6, 3, 3, 5, 6, 5, 6,
+    8, 6, 6, 6, 6, 5, 5, 6, 6, 4, 6, 6, 6, 7, 6, 6,
+    6, 6, 6, 6, 6, 6, 6, 8, 7, 6, 6, 3, 5, 3, 6, 6,
+    3, 6, 6, 5, 6, 6, 5, 6, 6, 2, 4, 5, 3, 6, 6, 6,
+    6, 6, 5, 6, 5, 6, 6, 8, 6, 6, 6, 4, 2, 4, 8, 7,
+    7, 7, 3, 6, 4, 9, 6, 6, 5, 9, 6, 4, 9, 4, 6, 7,
+    7, 3, 3, 5, 5, 7, 7, 8, 5, 9, 6, 4, 8, 7, 6, 6,
+    0, 2, 6, 7, 5, 6, 2, 5, 4, 8, 4, 6, 6, 4, 8, 6,
+    5, 6, 5, 5, 3, 7, 7, 3, 3, 4, 4, 6, 7, 7, 8, 5,
+    6, 6, 6, 6, 6, 6, 9, 6, 5, 5, 5, 5, 3, 3, 4, 4,
+    7, 6, 6, 6, 6, 6, 6, 7, 8, 6, 6, 6, 6, 6, 5, 6,
+    6, 6, 6, 6, 6, 6, 8, 5, 6, 6, 6, 6, 3, 3, 4, 4,
+    6, 6, 6, 6, 6, 6, 6, 8, 6, 6, 6, 6, 6, 6, 5, 6,
 };
+
+// 5x7 ASCII bitmap font (ASCII 32 ' ' to 126 '~')
+// Bit 0 = top row, Bit 6 = bottom row
+static const uint8_t kFont5x7[95][5] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00}, // ' '
+    {0x00, 0x00, 0x5F, 0x00, 0x00}, // '!'
+    {0x00, 0x07, 0x00, 0x07, 0x00}, // '"'
+    {0x14, 0x7F, 0x14, 0x7F, 0x14}, // '#'
+    {0x24, 0x2A, 0x7F, 0x2A, 0x12}, // '$'
+    {0x23, 0x13, 0x08, 0x64, 0x62}, // '%'
+    {0x36, 0x49, 0x55, 0x22, 0x50}, // '&'
+    {0x00, 0x05, 0x03, 0x00, 0x00}, // '\''
+    {0x00, 0x1C, 0x22, 0x41, 0x00}, // '('
+    {0x00, 0x41, 0x22, 0x1C, 0x00}, // ')'
+    {0x14, 0x08, 0x3E, 0x08, 0x14}, // '*'
+    {0x08, 0x08, 0x3E, 0x08, 0x08}, // '+'
+    {0x00, 0x50, 0x30, 0x00, 0x00}, // ','
+    {0x08, 0x08, 0x08, 0x08, 0x08}, // '-'
+    {0x00, 0x60, 0x60, 0x00, 0x00}, // '.'
+    {0x20, 0x10, 0x08, 0x04, 0x02}, // '/'
+    {0x3E, 0x51, 0x49, 0x45, 0x3E}, // '0'
+    {0x00, 0x42, 0x7F, 0x40, 0x00}, // '1'
+    {0x42, 0x61, 0x51, 0x49, 0x46}, // '2'
+    {0x21, 0x41, 0x45, 0x4B, 0x31}, // '3'
+    {0x18, 0x14, 0x12, 0x7F, 0x10}, // '4'
+    {0x27, 0x45, 0x45, 0x45, 0x39}, // '5'
+    {0x3C, 0x4A, 0x49, 0x49, 0x30}, // '6'
+    {0x01, 0x71, 0x09, 0x05, 0x03}, // '7'
+    {0x36, 0x49, 0x49, 0x49, 0x36}, // '8'
+    {0x06, 0x49, 0x49, 0x29, 0x1E}, // '9'
+    {0x00, 0x36, 0x36, 0x00, 0x00}, // ':'
+    {0x00, 0x56, 0x36, 0x00, 0x00}, // ';'
+    {0x08, 0x14, 0x22, 0x41, 0x00}, // '<'
+    {0x14, 0x14, 0x14, 0x14, 0x14}, // '='
+    {0x00, 0x41, 0x22, 0x14, 0x08}, // '>'
+    {0x02, 0x01, 0x51, 0x09, 0x06}, // '?'
+    {0x32, 0x49, 0x79, 0x41, 0x3E}, // '@'
+    {0x7E, 0x11, 0x11, 0x11, 0x7E}, // 'A'
+    {0x7F, 0x49, 0x49, 0x49, 0x36}, // 'B'
+    {0x3E, 0x41, 0x41, 0x41, 0x22}, // 'C'
+    {0x7F, 0x41, 0x41, 0x22, 0x1C}, // 'D'
+    {0x7F, 0x49, 0x49, 0x49, 0x41}, // 'E'
+    {0x7F, 0x09, 0x09, 0x09, 0x01}, // 'F'
+    {0x3E, 0x41, 0x49, 0x49, 0x7A}, // 'G'
+    {0x7F, 0x08, 0x08, 0x08, 0x7F}, // 'H'
+    {0x00, 0x41, 0x7F, 0x41, 0x00}, // 'I'
+    {0x20, 0x40, 0x41, 0x3F, 0x01}, // 'J'
+    {0x7F, 0x08, 0x14, 0x22, 0x41}, // 'K'
+    {0x7F, 0x40, 0x40, 0x40, 0x40}, // 'L'
+    {0x7F, 0x02, 0x0C, 0x02, 0x7F}, // 'M'
+    {0x7F, 0x04, 0x08, 0x10, 0x7F}, // 'N'
+    {0x3E, 0x41, 0x41, 0x41, 0x3E}, // 'O'
+    {0x7F, 0x09, 0x09, 0x09, 0x06}, // 'P'
+    {0x3E, 0x41, 0x51, 0x21, 0x5E}, // 'Q'
+    {0x7F, 0x09, 0x19, 0x29, 0x46}, // 'R'
+    {0x46, 0x49, 0x49, 0x49, 0x31}, // 'S'
+    {0x01, 0x01, 0x7F, 0x01, 0x01}, // 'T'
+    {0x3F, 0x40, 0x40, 0x40, 0x3F}, // 'U'
+    {0x1F, 0x20, 0x40, 0x20, 0x1F}, // 'V'
+    {0x3F, 0x40, 0x38, 0x40, 0x3F}, // 'W'
+    {0x63, 0x14, 0x08, 0x14, 0x63}, // 'X'
+    {0x07, 0x08, 0x70, 0x08, 0x07}, // 'Y'
+    {0x61, 0x51, 0x49, 0x45, 0x43}, // 'Z'
+    {0x00, 0x7F, 0x41, 0x41, 0x00}, // '['
+    {0x02, 0x04, 0x08, 0x10, 0x20}, // '\'
+    {0x00, 0x41, 0x41, 0x7F, 0x00}, // ']'
+    {0x04, 0x02, 0x01, 0x02, 0x04}, // '^'
+    {0x40, 0x40, 0x40, 0x40, 0x40}, // '_'
+    {0x00, 0x01, 0x02, 0x04, 0x00}, // '`'
+    {0x20, 0x54, 0x54, 0x54, 0x78}, // 'a'
+    {0x7F, 0x48, 0x44, 0x44, 0x38}, // 'b'
+    {0x38, 0x44, 0x44, 0x44, 0x20}, // 'c'
+    {0x38, 0x44, 0x44, 0x48, 0x7F}, // 'd'
+    {0x38, 0x54, 0x54, 0x54, 0x18}, // 'e'
+    {0x08, 0x7E, 0x09, 0x01, 0x02}, // 'f'
+    {0x0C, 0x52, 0x52, 0x52, 0x3E}, // 'g'
+    {0x7F, 0x08, 0x04, 0x04, 0x78}, // 'h'
+    {0x00, 0x44, 0x7D, 0x40, 0x00}, // 'i'
+    {0x20, 0x40, 0x44, 0x3D, 0x00}, // 'j'
+    {0x7F, 0x10, 0x28, 0x44, 0x00}, // 'k'
+    {0x00, 0x41, 0x7F, 0x40, 0x00}, // 'l'
+    {0x7C, 0x04, 0x18, 0x04, 0x78}, // 'm'
+    {0x7C, 0x08, 0x04, 0x04, 0x78}, // 'n'
+    {0x38, 0x44, 0x44, 0x44, 0x38}, // 'o'
+    {0x7C, 0x14, 0x14, 0x14, 0x08}, // 'p'
+    {0x08, 0x14, 0x14, 0x18, 0x7C}, // 'q'
+    {0x7C, 0x08, 0x04, 0x04, 0x08}, // 'r'
+    {0x48, 0x54, 0x54, 0x54, 0x20}, // 's'
+    {0x04, 0x3F, 0x44, 0x40, 0x20}, // 't'
+    {0x3C, 0x40, 0x40, 0x20, 0x7C}, // 'u'
+    {0x1C, 0x20, 0x40, 0x20, 0x1C}, // 'v'
+    {0x3C, 0x40, 0x30, 0x40, 0x3C}, // 'w'
+    {0x44, 0x28, 0x10, 0x28, 0x44}, // 'x'
+    {0x0C, 0x50, 0x50, 0x50, 0x3C}, // 'y'
+    {0x44, 0x64, 0x54, 0x4C, 0x44}, // 'z'
+    {0x00, 0x08, 0x36, 0x41, 0x00}, // '{'
+    {0x00, 0x00, 0x7F, 0x00, 0x00}, // '|'
+    {0x00, 0x41, 0x36, 0x08, 0x00}, // '}'
+    {0x08, 0x08, 0x2A, 0x1C, 0x08}  // '~'
+};
+
+// Decodes a 16x16 4bpp sprite (128 bytes, 4 tiles of 8x8) into a 16x16 pixel matrix
+static void decode_16x16_sprite(const uint8_t* tile_buf, uint8_t grid[16][16]) {
+    static const int kTileOffsets[4][3] = {
+        {0, 0, 0},
+        {32, 0, 8},
+        {64, 8, 0},
+        {96, 8, 8}
+    };
+    for (int t = 0; t < 4; ++t) {
+        int toff = kTileOffsets[t][0];
+        int br = kTileOffsets[t][1];
+        int bc = kTileOffsets[t][2];
+        for (int r = 0; r < 8; ++r) {
+            for (int c = 0; c < 8; c += 2) {
+                uint8_t b = tile_buf[toff + r * 4 + c / 2];
+                grid[br + r][bc + c] = b & 0x0F;
+                grid[br + r][bc + c + 1] = (b >> 4) & 0x0F;
+            }
+        }
+    }
+}
+
+// Encodes a 16x16 pixel matrix into GBA 16x16 4bpp sprite layout (128 bytes)
+static void encode_16x16_sprite(const uint8_t grid[16][16], uint8_t* tile_buf) {
+    static const int kTileOffsets[4][3] = {
+        {0, 0, 0},
+        {32, 0, 8},
+        {64, 8, 0},
+        {96, 8, 8}
+    };
+    for (int t = 0; t < 4; ++t) {
+        int toff = kTileOffsets[t][0];
+        int br = kTileOffsets[t][1];
+        int bc = kTileOffsets[t][2];
+        for (int r = 0; r < 8; ++r) {
+            for (int c = 0; c < 8; c += 2) {
+                uint8_t p0 = grid[br + r][bc + c] & 0x0F;
+                uint8_t p1 = grid[br + r][bc + c + 1] & 0x0F;
+                tile_buf[toff + r * 4 + c / 2] = p0 | (p1 << 4);
+            }
+        }
+    }
+}
 
 } // namespace
 
@@ -29,12 +182,35 @@ FontResizer& FontResizer::instance() {
 }
 
 FontResizer::FontResizer() {
-    update_metrics_for_scale(settings_.scale);
+    std::memset(advance_table_, 0, sizeof(advance_table_));
+    std::memset(font_width_cache_, 0, sizeof(font_width_cache_));
+    std::memset(font_tile_cache_, 0, sizeof(font_tile_cache_));
+    std::memset(authentic_rom_tiles_, 0, sizeof(authentic_rom_tiles_));
+    recompute_cache();
 }
 
 void FontResizer::set_font_scale(FontScale scale) {
     settings_.scale = scale;
-    update_metrics_for_scale(scale);
+    recompute_cache();
+}
+
+void FontResizer::set_font_style(FontStyle style) {
+    settings_.style = style;
+    switch (style) {
+        case FontStyle::Authentic:
+            settings_.edge_smoothing = false;
+            settings_.kerning_adjustment = 0;
+            break;
+        case FontStyle::CleanModern:
+            settings_.edge_smoothing = true;
+            settings_.kerning_adjustment = 0;
+            break;
+        case FontStyle::Condensed:
+            settings_.edge_smoothing = true;
+            settings_.kerning_adjustment = -1;
+            break;
+    }
+    recompute_cache();
 }
 
 void FontResizer::set_line_spacing(int spacing_px) {
@@ -43,11 +219,17 @@ void FontResizer::set_line_spacing(int spacing_px) {
 
 void FontResizer::set_kerning_adjustment(int kerning_px) {
     settings_.kerning_adjustment = std::clamp(kerning_px, -2, 2);
-    update_metrics_for_scale(settings_.scale);
+    recompute_cache();
 }
 
 void FontResizer::set_edge_smoothing(bool enable) {
     settings_.edge_smoothing = enable;
+    recompute_cache();
+}
+
+void FontResizer::invalidate_cache() {
+    authentic_rom_loaded_ = false;
+    recompute_cache();
 }
 
 int FontResizer::get_glyph_width() const {
@@ -60,65 +242,326 @@ int FontResizer::get_glyph_height() const {
 
 int FontResizer::get_char_advance_width(char c) const {
     unsigned char uc = static_cast<unsigned char>(c);
-    if (uc < 128) {
-        return advance_table_[uc];
+    return advance_table_[uc];
+}
+
+void FontResizer::ensure_authentic_rom_loaded() {
+    if (authentic_rom_loaded_) return;
+
+    ScopedInternalBusRead guard;
+    // Check if ROM is mapped by testing glyph 'A' (65)
+    uint16_t sample_hw = bus_read_u16(kFontTilesBase + 65 * 128);
+    if (sample_hw == 0) {
+        // ROM not mapped or uninitialized
+        return;
     }
-    return glyph_w_;
+
+    for (size_t i = 0; i < sizeof(authentic_rom_tiles_) / 2; ++i) {
+        uint16_t hw = bus_read_u16(kFontTilesBase + i * 2);
+        authentic_rom_tiles_[i * 2] = hw & 0xFF;
+        authentic_rom_tiles_[i * 2 + 1] = (hw >> 8) & 0xFF;
+    }
+    authentic_rom_loaded_ = true;
 }
 
 void FontResizer::update_metrics_for_scale(FontScale scale) {
-    float scale_factor = 1.0f;
     switch (scale) {
         case FontScale::Medium85:
             glyph_w_ = 7;
             glyph_h_ = 10;
             settings_.line_spacing = 13;
-            scale_factor = 0.85f;
             break;
         case FontScale::Compact70:
             glyph_w_ = 6;
             glyph_h_ = 8;
             settings_.line_spacing = 10;
-            scale_factor = 0.70f;
             break;
         case FontScale::Micro55:
             glyph_w_ = 5;
             glyph_h_ = 7;
             settings_.line_spacing = 8;
-            scale_factor = 0.55f;
             break;
         case FontScale::Original100:
         default:
             glyph_w_ = 8;
             glyph_h_ = 12;
             settings_.line_spacing = 16;
-            scale_factor = 1.0f;
             break;
     }
+}
 
-    // Populate proportional advance widths
-    for (int i = 0; i < 128; ++i) {
-        if (i >= 32 && (i - 32) < 95) {
-            int base_w = kBaseAsciiWidths[i - 32];
-            int scaled_w = static_cast<int>(std::round(base_w * scale_factor)) + settings_.kerning_adjustment;
-            advance_table_[i] = static_cast<uint8_t>(std::clamp(scaled_w, 2, glyph_w_));
+void FontResizer::recompute_cache() {
+    update_metrics_for_scale(settings_.scale);
+    ensure_authentic_rom_loaded();
+
+    float scale_factor = 1.0f;
+    switch (settings_.scale) {
+        case FontScale::Medium85:  scale_factor = 0.85f; break;
+        case FontScale::Compact70: scale_factor = 0.70f; break;
+        case FontScale::Micro55:   scale_factor = 0.55f; break;
+        case FontScale::Original100:
+        default:                   scale_factor = 1.0f;  break;
+    }
+
+    std::memset(font_tile_cache_, 0, sizeof(font_tile_cache_));
+
+    // 1. Calculate Advance Widths
+    for (int i = 0; i < 256; ++i) {
+        int orig_w = kRomLatinGlyphWidths[i];
+        if (settings_.style == FontStyle::Authentic) {
+            if (settings_.scale == FontScale::Original100) {
+                font_width_cache_[i] = orig_w;
+            } else {
+                int sw = static_cast<int>(std::round(orig_w * scale_factor)) + settings_.kerning_adjustment;
+                font_width_cache_[i] = (orig_w == 0) ? 0 : std::clamp(sw, 2, glyph_w_);
+            }
         } else {
-            advance_table_[i] = static_cast<uint8_t>(glyph_w_);
+            // CleanModern and Condensed: proportional widths based on clean typography
+            if (i >= 32 && i <= 126) {
+                if (i == 32) { // Space
+                    int sp_w = (settings_.scale == FontScale::Micro55) ? 2 :
+                               (settings_.scale == FontScale::Compact70) ? 3 :
+                               (settings_.scale == FontScale::Medium85) ? 3 : 4;
+                    if (settings_.style == FontStyle::Condensed && sp_w > 2) sp_w -= 1;
+                    font_width_cache_[i] = sp_w;
+                } else {
+                    int min_c = 5, max_c = -1;
+                    for (int c = 0; c < 5; ++c) {
+                        if (kFont5x7[i - 32][c] != 0) {
+                            min_c = std::min(min_c, c);
+                            max_c = std::max(max_c, c);
+                        }
+                    }
+                    int col_w = (max_c >= min_c) ? (max_c - min_c + 1) : 3;
+                    int base_w = col_w + 2; // glyph width + 1 shadow + 1 spacing
+                    int sw = static_cast<int>(std::round(base_w * scale_factor));
+                    if (settings_.style == FontStyle::Condensed && sw >= 4) {
+                        sw -= 1;
+                    }
+                    sw += settings_.kerning_adjustment;
+                    font_width_cache_[i] = std::clamp(sw, 2, glyph_w_);
+                }
+            } else {
+                int sw = static_cast<int>(std::round(orig_w * scale_factor)) + settings_.kerning_adjustment;
+                font_width_cache_[i] = (orig_w == 0) ? 0 : std::clamp(sw, 2, glyph_w_);
+            }
+        }
+        advance_table_[i] = static_cast<uint8_t>(font_width_cache_[i]);
+    }
+
+    // 2. Generate 16x16 4bpp Sprite Tile Data
+    if (settings_.style == FontStyle::Authentic) {
+        if (settings_.scale == FontScale::Original100) {
+            if (authentic_rom_loaded_) {
+                std::memcpy(font_tile_cache_, authentic_rom_tiles_, sizeof(font_tile_cache_));
+            }
+        } else {
+            // Downscale authentic GBA 16x16 glyphs
+            if (authentic_rom_loaded_) {
+                for (int i = 0; i < 256; ++i) {
+                    uint8_t src_grid[16][16];
+                    decode_16x16_sprite(&authentic_rom_tiles_[i * 128], src_grid);
+
+                    int min_r = 16, max_r = -1, min_c = 16, max_c = -1;
+                    for (int r = 0; r < 16; ++r) {
+                        for (int c = 0; c < 16; ++c) {
+                            if (src_grid[r][c] == 1) {
+                                min_r = std::min(min_r, r);
+                                max_r = std::max(max_r, r);
+                                min_c = std::min(min_c, c);
+                                max_c = std::max(max_c, c);
+                            }
+                        }
+                    }
+
+                    if (max_r >= min_r && max_c >= min_c) {
+                        int src_h = max_r - min_r + 1;
+                        int src_w = max_c - min_c + 1;
+                        int dst_h = std::clamp(static_cast<int>(std::round(src_h * scale_factor)), 1, 14);
+                        int dst_w = std::clamp(static_cast<int>(std::round(src_w * scale_factor)), 1, 14);
+                        int dst_top = 4 + (8 - dst_h) / 2;
+                        int dst_left = 1;
+
+                        uint8_t scaled_grid[16][16] = {};
+                        for (int dy = 0; dy < dst_h; ++dy) {
+                            int sy = min_r + (dy * src_h) / dst_h;
+                            for (int dx = 0; dx < dst_w; ++dx) {
+                                int sx = min_c + (dx * src_w) / dst_w;
+                                if (src_grid[sy][sx] == 1) {
+                                    scaled_grid[dst_top + dy][dst_left + dx] = 1;
+                                }
+                            }
+                        }
+
+                        // Add drop shadow at +1, +1
+                        for (int r = 0; r < 16; ++r) {
+                            for (int c = 0; c < 16; ++c) {
+                                if (scaled_grid[r][c] == 1 && r + 1 < 16 && c + 1 < 16 && scaled_grid[r + 1][c + 1] == 0) {
+                                    scaled_grid[r + 1][c + 1] = 2;
+                                }
+                            }
+                        }
+
+                        encode_16x16_sprite(scaled_grid, &font_tile_cache_[i * 128]);
+                    }
+                }
+            }
+        }
+    } else {
+        // CleanModern or Condensed: Render crisp high-contrast modern typography
+        // Seed non-ASCII glyphs from authentic ROM tiles if available
+        if (authentic_rom_loaded_) {
+            std::memcpy(font_tile_cache_, authentic_rom_tiles_, sizeof(font_tile_cache_));
+        }
+
+        int dst_h = 7;
+        int dst_top = 4;
+        int dst_left = (settings_.style == FontStyle::Condensed) ? 0 : 1;
+        switch (settings_.scale) {
+            case FontScale::Original100:
+                dst_h = 9;
+                dst_top = 3;
+                dst_left = (settings_.style == FontStyle::Condensed) ? 1 : 2;
+                break;
+            case FontScale::Medium85:
+                dst_h = 8;
+                dst_top = 4;
+                dst_left = (settings_.style == FontStyle::Condensed) ? 0 : 1;
+                break;
+            case FontScale::Compact70:
+                dst_h = 7;
+                dst_top = 4;
+                dst_left = (settings_.style == FontStyle::Condensed) ? 0 : 1;
+                break;
+            case FontScale::Micro55:
+                dst_h = 6;
+                dst_top = 5;
+                dst_left = 0;
+                break;
+        }
+
+        for (int i = 32; i <= 126; ++i) {
+            if (i == 32) {
+                // Space: empty tile
+                std::memset(&font_tile_cache_[i * 128], 0, 128);
+                continue;
+            }
+
+            const uint8_t* cols = kFont5x7[i - 32];
+            uint8_t src_bitmap[7][5] = {};
+            int min_c = 5, max_c = -1;
+            for (int c = 0; c < 5; ++c) {
+                for (int r = 0; r < 7; ++r) {
+                    if (cols[c] & (1 << r)) {
+                        src_bitmap[r][c] = 1;
+                        min_c = std::min(min_c, c);
+                        max_c = std::max(max_c, c);
+                    }
+                }
+            }
+
+            if (max_c < min_c) { min_c = 0; max_c = 4; }
+            int src_w = max_c - min_c + 1;
+            int src_h = 7;
+            int dst_w = std::clamp((src_w * dst_h + 3) / src_h, 1, 14);
+
+            uint8_t grid[16][16] = {};
+            for (int dy = 0; dy < dst_h; ++dy) {
+                int sy = std::min(6, (dy * src_h) / dst_h);
+                for (int dx = 0; dx < dst_w; ++dx) {
+                    int sx = std::min(max_c, min_c + (dx * src_w) / dst_w);
+                    if (src_bitmap[sy][sx]) {
+                        int gy = dst_top + dy;
+                        int gx = dst_left + dx;
+                        if (gy < 16 && gx < 16) {
+                            grid[gy][gx] = 1;
+                        }
+                    }
+                }
+            }
+
+            // Drop shadow
+            for (int r = 0; r < 16; ++r) {
+                for (int c = 0; c < 16; ++c) {
+                    if (grid[r][c] == 1 && r + 1 < 16 && c + 1 < 16 && grid[r + 1][c + 1] == 0) {
+                        grid[r + 1][c + 1] = 2;
+                    }
+                }
+            }
+
+            encode_16x16_sprite(grid, &font_tile_cache_[i * 128]);
         }
     }
+}
+
+bool FontResizer::intercept_bus_read(uint32_t addr, uint32_t width, uint32_t* out_val) {
+    if (!out_val) return false;
+
+    // 1. Advance Widths Table (0x08F7D438 - 0x08F7D638, 512 bytes = 256 halfwords)
+    if (addr >= kFontWidthTableBase && addr < kFontWidthTableEnd) {
+        if (settings_.style == FontStyle::Authentic && settings_.scale == FontScale::Original100) {
+            return false;
+        }
+        uint32_t offset = addr - kFontWidthTableBase;
+        uint32_t glyph_idx = offset / 2;
+        if (glyph_idx >= 256) return false;
+
+        if (width == 2) {
+            *out_val = font_width_cache_[glyph_idx];
+            return true;
+        } else if (width == 1) {
+            uint16_t w = font_width_cache_[glyph_idx];
+            *out_val = (offset & 1) ? ((w >> 8) & 0xFF) : (w & 0xFF);
+            return true;
+        } else if (width == 4) {
+            uint32_t w0 = font_width_cache_[glyph_idx];
+            uint32_t w1 = (glyph_idx + 1 < 256) ? font_width_cache_[glyph_idx + 1] : 0;
+            *out_val = (w1 << 16) | (w0 & 0xFFFF);
+            return true;
+        }
+        return false;
+    }
+
+    // 2. Glyph Tiles Table (0x090CBFB2 - 0x090D3FB2, 32768 bytes)
+    if (addr >= kFontTilesBase && addr < kFontTilesEnd) {
+        if (settings_.style == FontStyle::Authentic && settings_.scale == FontScale::Original100) {
+            return false;
+        }
+        uint32_t offset = addr - kFontTilesBase;
+        if (offset >= sizeof(font_tile_cache_)) return false;
+
+        if (width == 1) {
+            *out_val = font_tile_cache_[offset];
+            return true;
+        } else if (width == 2) {
+            if (offset + 1 < sizeof(font_tile_cache_)) {
+                *out_val = static_cast<uint32_t>(font_tile_cache_[offset]) |
+                          (static_cast<uint32_t>(font_tile_cache_[offset + 1]) << 8);
+                return true;
+            }
+        } else if (width == 4) {
+            if (offset + 3 < sizeof(font_tile_cache_)) {
+                *out_val = static_cast<uint32_t>(font_tile_cache_[offset]) |
+                          (static_cast<uint32_t>(font_tile_cache_[offset + 1]) << 8) |
+                          (static_cast<uint32_t>(font_tile_cache_[offset + 2]) << 16) |
+                          (static_cast<uint32_t>(font_tile_cache_[offset + 3]) << 24);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    return false;
 }
 
 void FontResizer::render_scaled_glyph_4bpp(const uint8_t* src_glyph_1bpp, uint8_t* dst_tile_4bpp, uint8_t fg_palette_idx) {
     if (!src_glyph_1bpp || !dst_tile_4bpp) return;
 
-    // Clear destination 8x8 4bpp tile (32 bytes)
     std::memset(dst_tile_4bpp, 0, 32);
 
     const int target_w = glyph_w_;
     const int target_h = glyph_h_;
 
-    // Sample from original 8x12 1bpp grid to target_w x target_h
-    // and center within the 8x8 tile
     int offset_x = (8 - target_w) / 2;
     int offset_y = (8 - std::min(8, target_h)) / 2;
 
@@ -126,7 +569,6 @@ void FontResizer::render_scaled_glyph_4bpp(const uint8_t* src_glyph_1bpp, uint8_
         int dst_y = offset_y + ty;
         if (dst_y < 0 || dst_y >= 8) continue;
 
-        // Map target y to source y in 8x12 grid
         int sy = (ty * 12) / target_h;
         sy = std::clamp(sy, 0, 11);
         uint8_t src_row_byte = src_glyph_1bpp[sy];
@@ -140,9 +582,6 @@ void FontResizer::render_scaled_glyph_4bpp(const uint8_t* src_glyph_1bpp, uint8_
 
             bool pixel_on = (src_row_byte & (0x80 >> sx)) != 0;
             if (pixel_on) {
-                // In GBA 4bpp tile:
-                // byte_index = (dst_y * 4) + (dst_x / 2)
-                // pixel 0 is low nibble, pixel 1 is high nibble
                 int byte_idx = (dst_y * 4) + (dst_x / 2);
                 if (dst_x % 2 == 0) {
                     dst_tile_4bpp[byte_idx] = (dst_tile_4bpp[byte_idx] & 0xF0) | (fg_palette_idx & 0x0F);
@@ -159,16 +598,12 @@ bool FontResizer::intercept_text_tile_upload(uint32_t vram_dest_addr, const uint
         return false;
     }
 
-    // Check if destination is within GBA BG Character Base Blocks (VRAM 0x06000000 - 0x0600FFFF)
     if (vram_dest_addr < 0x06000000 || vram_dest_addr >= 0x06010000) {
         return false;
     }
 
     uint32_t offset = vram_dest_addr - 0x06000000;
-    
-    // Scale glyph into temporary 4bpp tile buffer
     uint8_t scaled_tile[32];
-    // In GBA font VRAM upload, tile_data contains 1bpp or 2bpp glyph rows
     render_scaled_glyph_4bpp(tile_data, scaled_tile);
 
     std::memcpy(vram_base + offset, scaled_tile, 32);
