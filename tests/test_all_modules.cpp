@@ -454,11 +454,33 @@ static void test_dialogue_components() {
     assert(donald_compact.find("handles my magic!") != std::string::npos);
 
     // Original density: strict 26 char line width preserves authentic 3-line layout
+    DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::Standard240);
     enhancer.set_density(FontDensity::Original);
+    enhancer.set_line_capacity(LineCapacityMode::Authentic3Lines);
     std::string donald_orig = enhancer.process_dialogue_text("It must be a Heartless!\nLet's see how it handles my\nmagic!");
     assert(donald_orig.find("handles my\nmagic!") != std::string::npos);
 
-    // Verify that story dialogue lines with words like "just" and "going" are NEVER chopped across lines
+    // Test dynamic line capacity computation
+    enhancer.set_density(FontDensity::Original);
+    enhancer.set_font_scale(FontScale::Original100);
+    enhancer.set_line_capacity(LineCapacityMode::Authentic3Lines);
+    DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::Standard240);
+    enhancer.recompute_line_width();
+    assert(enhancer.settings().max_line_width_chars >= 24 && enhancer.settings().max_line_width_chars <= 28);
+    assert(enhancer.settings().max_line_width_px == 152);
+
+    // Widescreen box expansion dynamically increases pixel width and characters
+    DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::WidescreenExpanded);
+    enhancer.recompute_line_width();
+    assert(enhancer.settings().max_line_width_px == 200);
+    assert(enhancer.settings().max_line_width_chars > 28);
+
+    // Compact font scale dynamically increases characters per line
+    enhancer.set_font_scale(FontScale::Compact70);
+    enhancer.recompute_line_width();
+    assert(enhancer.settings().max_line_width_chars >= 40);
+
+    // Independent setting validation
     enhancer.set_density(FontDensity::Compact);
     enhancer.set_font_scale(FontScale::Compact70);
     enhancer.set_font_style(FontStyle::CleanModern);
@@ -631,6 +653,8 @@ static void test_font_resizer() {
     // Test bus read interception for ROM font width table
     fr.set_font_style(FontStyle::Authentic);
     fr.set_font_scale(FontScale::Original100);
+    fr.set_density(FontDensity::Original);
+    fr.set_kerning_adjustment(0);
     uint32_t val = 0;
     // Authentic at 100% passes through to genuine ROM directly
     assert(!fr.intercept_bus_read(FontResizer::kFontWidthTableBase + 65 * 2, 2, &val));
@@ -649,6 +673,15 @@ static void test_font_resizer() {
     // ROM sprite frame piece descriptors at 0x090CBFB2 must NEVER be intercepted!
     uint32_t frame_val = 0;
     assert(!fr.intercept_bus_read(FontResizer::kFontTilesBase + 65 * 128, 4, &frame_val));
+
+    // Test density and dynamic advance widths
+    fr.set_density(FontDensity::Compact);
+    assert(fr.settings().density == FontDensity::Compact);
+    assert(fr.get_average_char_width() > 0.0f);
+    uint32_t val_compact = 0;
+    assert(fr.intercept_bus_read(FontResizer::kFontWidthTableBase + 65 * 2, 2, &val_compact));
+    assert(val_compact > 0);
+    fr.set_density(FontDensity::Original);
 
     // Restore default
     fr.set_font_style(FontStyle::Authentic);

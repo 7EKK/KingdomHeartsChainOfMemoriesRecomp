@@ -1,4 +1,5 @@
 #include "dialogue_box_scaler.h"
+#include "dialogue_enhancer.h"
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -25,10 +26,14 @@ void DialogueBoxScaler::set_width_mode(BoxWidthMode mode) {
             settings_.extra_horizontal_tiles = 8; // 28 + 8 = 36 tiles (288px)
             break;
     }
+    DialogueEnhancer::instance().recompute_line_width();
+    DialogueEnhancer::instance().invalidate_cache();
 }
 
 void DialogueBoxScaler::set_extra_tiles(int extra_tiles) {
     settings_.extra_horizontal_tiles = std::clamp(extra_tiles, 0, 12);
+    DialogueEnhancer::instance().recompute_line_width();
+    DialogueEnhancer::instance().invalidate_cache();
 }
 
 void DialogueBoxScaler::set_max_lines(int lines) {

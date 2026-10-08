@@ -608,6 +608,10 @@ static int khcom_rom_read16_hook(std::uint32_t addr, std::uint16_t original, std
         *overridden = static_cast<uint16_t>(val);
         return 1;
     }
+    if (DialogueEnhancer::instance().intercept_bus_read(addr, 2, &val)) {
+        *overridden = static_cast<uint16_t>(val);
+        return 1;
+    }
     return 0;
 }
 
@@ -615,6 +619,10 @@ static int khcom_rom_read32_hook(std::uint32_t addr, std::uint32_t original, std
     if (is_internal_bus_read()) return 0;
     uint32_t val = original;
     if (FontResizer::instance().intercept_bus_read(addr, 4, &val)) {
+        *overridden = val;
+        return 1;
+    }
+    if (DialogueEnhancer::instance().intercept_bus_read(addr, 4, &val)) {
         *overridden = val;
         return 1;
     }

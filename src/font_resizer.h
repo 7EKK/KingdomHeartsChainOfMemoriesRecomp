@@ -14,6 +14,12 @@ enum class FontScale : int {
     Micro55     = 3  // 5x7 glyphs, 8px line spacing
 };
 
+enum class FontDensity : int {
+    Original    = 0, // 100% standard GBA glyph spacing (~26 chars)
+    Compact     = 1, // 85% compact glyph spacing (~34 chars)
+    HighDensity = 2  // 70% high-density glyph spacing (~42 chars)
+};
+
 enum class FontStyle : int {
     Authentic   = 0, // Authentic standard GBA pixel font
     CleanModern = 1, // Anti-aliased high-contrast sans glyphs
@@ -22,6 +28,7 @@ enum class FontStyle : int {
 
 struct FontResizerSettings {
     FontScale scale = FontScale::Original100;
+    FontDensity density = FontDensity::Original;
     FontStyle style = FontStyle::Authentic;
     int line_spacing = 16;       // Vertical line pitch in pixels (8 to 20)
     int kerning_adjustment = 0;   // Kerning offset in pixels (-2 to +2)
@@ -35,6 +42,7 @@ public:
     const FontResizerSettings& settings() const { return settings_; }
     FontResizerSettings& settings() { return settings_; }
 
+    void set_density(FontDensity density);
     void set_font_scale(FontScale scale);
     void set_font_style(FontStyle style);
     void set_line_spacing(int spacing_px);
@@ -47,6 +55,9 @@ public:
 
     // Calculates proportional advance width for a given ASCII character
     int get_char_advance_width(char c) const;
+
+    // Returns weighted average glyph advance width across alphanumeric characters
+    float get_average_char_width() const;
 
     // Downsamples an 8x12 1bpp glyph into an 8x8 4bpp GBA VRAM tile
     // 4bpp GBA tile: 32 bytes (2 pixels per byte, 8 rows of 4 bytes)

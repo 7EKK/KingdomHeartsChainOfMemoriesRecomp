@@ -119,6 +119,10 @@ target_include_directories(KHCOMRecomp PRIVATE
 
 if(COMMAND recomp_target_launcher_ui)
     recomp_target_launcher_ui(KHCOMRecomp CONSOLE gba)
+    get_target_property(_khcom_sources KHCOMRecomp SOURCES)
+    list(FILTER _khcom_sources EXCLUDE REGEX "runtime_ui_imgui\\.cpp$")
+    set_target_properties(KHCOMRecomp PROPERTIES SOURCES "${_khcom_sources}")
+    target_sources(KHCOMRecomp PRIVATE src/runtime_ui_imgui_enhanced.cpp)
 endif()
 
 if(COMMAND target_link_gbarecomp_runtime_stack)
@@ -194,6 +198,10 @@ target_include_directories(khcom_unit_tests PRIVATE
 )
 if(COMMAND recomp_target_launcher_ui)
     recomp_target_launcher_ui(khcom_unit_tests CONSOLE gba)
+    get_target_property(_test_sources khcom_unit_tests SOURCES)
+    list(FILTER _test_sources EXCLUDE REGEX "runtime_ui_imgui\\.cpp$")
+    set_target_properties(khcom_unit_tests PROPERTIES SOURCES "${_test_sources}")
+    target_sources(khcom_unit_tests PRIVATE src/runtime_ui_imgui_enhanced.cpp)
 endif()
 if(COMMAND target_link_gbarecomp_runtime_stack)
     target_link_gbarecomp_runtime_stack(khcom_unit_tests)

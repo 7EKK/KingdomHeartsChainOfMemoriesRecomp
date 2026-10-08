@@ -8,12 +8,6 @@
 
 namespace khcom {
 
-enum class FontDensity : int {
-    Original    = 0, // 100% standard GBA glyph spacing (~26 chars)
-    Compact     = 1, // 80% compact glyph spacing (~34 chars)
-    HighDensity = 2  // 65% high-density glyph spacing (~42 chars)
-};
-
 enum class LineCapacityMode : int {
     Authentic3Lines = 0, // Authentic 3 lines (standard GBA)
     Dense2Lines     = 1, // Prioritize 2 dense lines (fewer boxes)
@@ -21,14 +15,14 @@ enum class LineCapacityMode : int {
 };
 
 struct DialogueEnhancerSettings {
-    FontDensity density = FontDensity::Compact;
-    FontScale scale = FontScale::Compact70;
-    FontStyle style = FontStyle::CleanModern;
-    LineCapacityMode line_capacity = LineCapacityMode::Dense2Lines;
+    FontDensity density = FontDensity::Original;
+    FontScale scale = FontScale::Original100;
+    FontStyle style = FontStyle::Authentic;
+    LineCapacityMode line_capacity = LineCapacityMode::Authentic3Lines;
     bool soft_word_wrap = true;
     bool case_aware_continuation = true;
-    int max_line_width_chars = 34; // Default Compact is 34 chars
-    int max_line_width_px = 152;   // Safe GBA text box line pixel width (fits within 168px margin)
+    int max_line_width_chars = 26; // Dynamically computed from box width & font size
+    int max_line_width_px = 152;   // Dynamically computed from dialogue box horizontal tiles
 };
 
 class DialogueEnhancer {
@@ -37,6 +31,8 @@ public:
 
     const DialogueEnhancerSettings& settings() const { return settings_; }
     DialogueEnhancerSettings& settings() { return settings_; }
+
+    void recompute_line_width();
 
     void set_density(FontDensity density);
     void set_font_scale(FontScale scale);
@@ -66,8 +62,6 @@ public:
 
 private:
     DialogueEnhancer();
-
-    void recompute_line_width();
 
     DialogueEnhancerSettings settings_;
 

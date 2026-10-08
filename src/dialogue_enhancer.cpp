@@ -151,52 +151,33 @@ DialogueEnhancer::DialogueEnhancer() {
 }
 
 void DialogueEnhancer::recompute_line_width() {
-    if (settings_.density == FontDensity::Original) {
-        settings_.max_line_width_chars = 26;
-        return;
-    }
+    // 1. Calculate available text pixel width dynamically:
+    // Base GBA dialogue box has 152px usable text area (28 tiles = 224px minus portrait & borders).
+    // In widescreen or responsive modes, extra horizontal tiles widen the dialogue box.
+    int extra_tiles = DialogueBoxScaler::instance().settings().extra_horizontal_tiles;
+    int extra_px = extra_tiles * 8;
+    settings_.max_line_width_px = 152 + extra_px;
 
-    int base_chars = 26;
-    switch (settings_.scale) {
-        case FontScale::Micro55:     base_chars = 44; break;
-        case FontScale::Compact70:   base_chars = 36; break;
-        case FontScale::Medium85:    base_chars = 30; break;
-        case FontScale::Original100:
-        default:                     base_chars = 26; break;
-    }
+    // 2. Calculate average character width dynamically based on active FontResizer metrics:
+    float avg_char_w = FontResizer::instance().get_average_char_width();
+    if (avg_char_w < 2.0f) avg_char_w = 2.0f;
 
-    if (settings_.density == FontDensity::HighDensity) base_chars += 4;
-    else if (settings_.density == FontDensity::Compact) base_chars += 2;
-    if (settings_.style == FontStyle::Condensed) base_chars += 2;
+    // 3. Dynamic max characters per line:
+    int dynamic_chars = static_cast<int>(settings_.max_line_width_px / avg_char_w);
 
+    // Fine-tune based on line capacity mode
     if (settings_.line_capacity == LineCapacityMode::Dense2Lines) {
-        base_chars += 2;
+        dynamic_chars += 2;
     } else if (settings_.line_capacity == LineCapacityMode::Expanded4Lines) {
-        base_chars += 4;
+        dynamic_chars += 4;
     }
 
-    settings_.max_line_width_chars = base_chars;
+    settings_.max_line_width_chars = std::clamp(dynamic_chars, 24, 80);
 }
 
 void DialogueEnhancer::set_density(FontDensity density) {
     settings_.density = density;
-    switch (density) {
-        case FontDensity::Original:
-            settings_.scale = FontScale::Original100;
-            FontResizer::instance().set_font_scale(FontScale::Original100);
-            DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::Standard240);
-            break;
-        case FontDensity::Compact:
-            settings_.scale = FontScale::Compact70;
-            FontResizer::instance().set_font_scale(FontScale::Compact70);
-            DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::WidescreenExpanded);
-            break;
-        case FontDensity::HighDensity:
-            settings_.scale = FontScale::Micro55;
-            FontResizer::instance().set_font_scale(FontScale::Micro55);
-            DialogueBoxScaler::instance().set_width_mode(BoxWidthMode::DynamicResponsive);
-            break;
-    }
+    FontResizer::instance().set_density(density);
     recompute_line_width();
     invalidate_cache();
 }
@@ -242,7 +223,11 @@ bool DialogueEnhancer::intercept_bus_read(uint32_t addr, uint32_t width, uint32_
         return false;
     }
 
-    if (settings_.density == FontDensity::Original && !settings_.soft_word_wrap) {
+    if (settings_.density == FontDensity::Original &&
+        settings_.scale == FontScale::Original100 &&
+        settings_.style == FontStyle::Authentic &&
+        settings_.line_capacity == LineCapacityMode::Authentic3Lines &&
+        !settings_.soft_word_wrap) {
         return false;
     }
 
@@ -284,11 +269,10 @@ bool DialogueEnhancer::intercept_bus_read(uint32_t addr, uint32_t width, uint32_
         }
     }
 
-    // For in-game dialogue rendering via GBA CPU, the dialogue text box has a
-    // physical right margin of 168 pixels (21 tiles). We enforce a strict safe limit
-    // of 152 pixels and dynamic character capacity so lines NEVER hit the 168px wall and chop words in half!
+    // Dynamic line wrapping based on current font size, style, density, and box width
+    recompute_line_width();
     const int bus_max_chars = settings_.max_line_width_chars;
-    const int bus_max_px = 152;
+    const int bus_max_px = settings_.max_line_width_px;
     cached_words_ = rewrap_words_in_place(cached_words_, bus_max_chars, bus_max_px,
                                           settings_.soft_word_wrap, settings_.case_aware_continuation);
     s_in_intercept = false;
@@ -362,11 +346,16 @@ std::string DialogueEnhancer::process_dialogue_text(std::string_view raw_text) {
         return std::string(raw_text);
     }
 
+    recompute_line_width();
+
     std::string result;
     result.reserve(raw_text.size());
 
     int current_line_len = 0;
+    int current_line_px = 0;
     const int max_len = settings_.max_line_width_chars;
+    const int max_px = settings_.max_line_width_px;
+    const int space_px = FontResizer::instance().get_char_advance_width(' ');
 
     for (size_t i = 0; i < raw_text.size(); ++i) {
         char c = raw_text[i];
@@ -375,29 +364,38 @@ std::string DialogueEnhancer::process_dialogue_text(std::string_view raw_text) {
             char prev = (i > 0) ? raw_text[i - 1] : ' ';
             char next = (i + 1 < raw_text.size()) ? raw_text[i + 1] : ' ';
 
-            // Measure next word length so we don't merge if the next word would exceed max_len
+            // Measure next word length and px width so we don't merge if next word exceeds limits
             int next_word_len = 0;
+            int next_word_px = 0;
             for (size_t j = i + 1; j < raw_text.size(); ++j) {
                 if (raw_text[j] == '\n' || raw_text[j] == '\r' || raw_text[j] == ' ') break;
                 ++next_word_len;
+                next_word_px += get_char_px_width(static_cast<uint8_t>(raw_text[j]));
             }
 
-            if (should_merge_newline(prev, next) && (current_line_len + 1 + next_word_len <= max_len)) {
+            if (should_merge_newline(prev, next) &&
+                (current_line_len + 1 + next_word_len <= max_len) &&
+                (current_line_px + space_px + next_word_px <= max_px)) {
                 if (!result.empty() && result.back() != ' ') {
                     result.push_back(' ');
                     ++current_line_len;
+                    current_line_px += space_px;
                 }
             } else {
                 result.push_back('\n');
                 current_line_len = 0;
+                current_line_px = 0;
             }
         } else {
             result.push_back(c);
+            const int c_px = get_char_px_width(static_cast<uint8_t>(c));
             ++current_line_len;
+            current_line_px += c_px;
 
-            if (current_line_len >= max_len && c == ' ') {
+            if ((current_line_len >= max_len || current_line_px >= max_px) && c == ' ') {
                 result.back() = '\n';
                 current_line_len = 0;
+                current_line_px = 0;
             }
         }
     }
@@ -423,8 +421,9 @@ std::string DialogueEnhancer::get_rewrapped_dialogue(uint32_t text_ptr) {
             words.push_back(w);
         }
     }
-    const int bus_max_chars = 26;
-    const int bus_max_px = 152;
+    recompute_line_width();
+    const int bus_max_chars = settings_.max_line_width_chars;
+    const int bus_max_px = settings_.max_line_width_px;
     std::vector<uint16_t> rewrapped = rewrap_words_in_place(words, bus_max_chars, bus_max_px,
                                                             settings_.soft_word_wrap, settings_.case_aware_continuation);
     std::string result;

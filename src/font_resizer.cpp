@@ -189,6 +189,11 @@ FontResizer::FontResizer() {
     recompute_cache();
 }
 
+void FontResizer::set_density(FontDensity density) {
+    settings_.density = density;
+    recompute_cache();
+}
+
 void FontResizer::set_font_scale(FontScale scale) {
     settings_.scale = scale;
     recompute_cache();
@@ -243,6 +248,17 @@ int FontResizer::get_glyph_height() const {
 int FontResizer::get_char_advance_width(char c) const {
     unsigned char uc = static_cast<unsigned char>(c);
     return advance_table_[uc];
+}
+
+float FontResizer::get_average_char_width() const {
+    static const char kSample[] = "etaoinshrdlcumwfgypbvkjxqz ETAOINSHRDLCUMWFGYPBVKJXQZ.,";
+    int sum = 0;
+    int count = 0;
+    for (size_t i = 0; i < sizeof(kSample) - 1; ++i) {
+        sum += get_char_advance_width(kSample[i]);
+        ++count;
+    }
+    return (count > 0) ? (static_cast<float>(sum) / count) : 5.8f;
 }
 
 void FontResizer::ensure_authentic_rom_loaded() {
@@ -303,27 +319,56 @@ void FontResizer::recompute_cache() {
         default:                   scale_factor = 1.0f;  break;
     }
 
+    float density_factor = 1.0f;
+    int density_kerning = 0;
+    switch (settings_.density) {
+        case FontDensity::Compact:
+            density_factor = 0.85f;
+            density_kerning = -1;
+            break;
+        case FontDensity::HighDensity:
+            density_factor = 0.70f;
+            density_kerning = -2;
+            break;
+        case FontDensity::Original:
+        default:
+            density_factor = 1.0f;
+            density_kerning = 0;
+            break;
+    }
+
     std::memset(font_tile_cache_, 0, sizeof(font_tile_cache_));
 
-    // 1. Calculate Advance Widths
+    // 1. Calculate Advance Widths dynamically
     for (int i = 0; i < 256; ++i) {
         int orig_w = kRomLatinGlyphWidths[i];
+        if (orig_w == 0) {
+            font_width_cache_[i] = 0;
+            advance_table_[i] = 0;
+            continue;
+        }
+
+        float total_factor = scale_factor * density_factor;
+        int total_kerning = density_kerning + settings_.kerning_adjustment;
+
         if (settings_.style == FontStyle::Authentic) {
-            if (settings_.scale == FontScale::Original100) {
+            if (settings_.scale == FontScale::Original100 &&
+                settings_.density == FontDensity::Original &&
+                settings_.kerning_adjustment == 0) {
                 font_width_cache_[i] = orig_w;
             } else {
-                int sw = static_cast<int>(std::round(orig_w * scale_factor)) + settings_.kerning_adjustment;
-                font_width_cache_[i] = (orig_w == 0) ? 0 : std::clamp(sw, 2, glyph_w_);
+                int sw = static_cast<int>(std::round(orig_w * total_factor)) + total_kerning;
+                font_width_cache_[i] = std::clamp(sw, 1, glyph_w_);
             }
+        } else if (settings_.style == FontStyle::Condensed) {
+            int sw = static_cast<int>(std::round(orig_w * total_factor)) - 1 + total_kerning;
+            font_width_cache_[i] = std::clamp(sw, 1, glyph_w_);
         } else {
-            // CleanModern and Condensed: proportional widths based on clean typography
+            // CleanModern: proportional widths based on clean typography
             if (i >= 32 && i <= 126) {
                 if (i == 32) { // Space
-                    int sp_w = (settings_.scale == FontScale::Micro55) ? 2 :
-                               (settings_.scale == FontScale::Compact70) ? 3 :
-                               (settings_.scale == FontScale::Medium85) ? 3 : 4;
-                    if (settings_.style == FontStyle::Condensed && sp_w > 2) sp_w -= 1;
-                    font_width_cache_[i] = sp_w;
+                    int sp_w = static_cast<int>(std::round(4.0f * total_factor)) + total_kerning;
+                    font_width_cache_[i] = std::clamp(sp_w, 2, 8);
                 } else {
                     int min_c = 5, max_c = -1;
                     for (int c = 0; c < 5; ++c) {
@@ -333,17 +378,13 @@ void FontResizer::recompute_cache() {
                         }
                     }
                     int col_w = (max_c >= min_c) ? (max_c - min_c + 1) : 3;
-                    int base_w = col_w + 2; // glyph width + 1 shadow + 1 spacing
-                    int sw = static_cast<int>(std::round(base_w * scale_factor));
-                    if (settings_.style == FontStyle::Condensed && sw >= 4) {
-                        sw -= 1;
-                    }
-                    sw += settings_.kerning_adjustment;
-                    font_width_cache_[i] = std::clamp(sw, 2, glyph_w_);
+                    int base_w = col_w + 1; // glyph width + spacing
+                    int sw = static_cast<int>(std::round(base_w * total_factor)) + total_kerning;
+                    font_width_cache_[i] = std::clamp(sw, 1, glyph_w_);
                 }
             } else {
-                int sw = static_cast<int>(std::round(orig_w * scale_factor)) + settings_.kerning_adjustment;
-                font_width_cache_[i] = (orig_w == 0) ? 0 : std::clamp(sw, 2, glyph_w_);
+                int sw = static_cast<int>(std::round(orig_w * total_factor)) + total_kerning;
+                font_width_cache_[i] = std::clamp(sw, 1, glyph_w_);
             }
         }
         advance_table_[i] = static_cast<uint8_t>(font_width_cache_[i]);
@@ -499,7 +540,10 @@ bool FontResizer::intercept_bus_read(uint32_t addr, uint32_t width, uint32_t* ou
 
     // 1. Advance Widths Table (0x08F7D438 - 0x08F7D638, 512 bytes = 256 halfwords)
     if (addr >= kFontWidthTableBase && addr < kFontWidthTableEnd) {
-        if (settings_.style == FontStyle::Authentic && settings_.scale == FontScale::Original100) {
+        if (settings_.style == FontStyle::Authentic &&
+            settings_.scale == FontScale::Original100 &&
+            settings_.density == FontDensity::Original &&
+            settings_.kerning_adjustment == 0) {
             return false;
         }
         uint32_t offset = addr - kFontWidthTableBase;
