@@ -522,34 +522,9 @@ bool FontResizer::intercept_bus_read(uint32_t addr, uint32_t width, uint32_t* ou
         return false;
     }
 
-    // 2. Glyph Tiles Table (0x090CBFB2 - 0x090D3FB2, 32768 bytes)
-    if (addr >= kFontTilesBase && addr < kFontTilesEnd) {
-        if (settings_.style == FontStyle::Authentic && settings_.scale == FontScale::Original100) {
-            return false;
-        }
-        uint32_t offset = addr - kFontTilesBase;
-        if (offset >= sizeof(font_tile_cache_)) return false;
-
-        if (width == 1) {
-            *out_val = font_tile_cache_[offset];
-            return true;
-        } else if (width == 2) {
-            if (offset + 1 < sizeof(font_tile_cache_)) {
-                *out_val = static_cast<uint32_t>(font_tile_cache_[offset]) |
-                          (static_cast<uint32_t>(font_tile_cache_[offset + 1]) << 8);
-                return true;
-            }
-        } else if (width == 4) {
-            if (offset + 3 < sizeof(font_tile_cache_)) {
-                *out_val = static_cast<uint32_t>(font_tile_cache_[offset]) |
-                          (static_cast<uint32_t>(font_tile_cache_[offset + 1]) << 8) |
-                          (static_cast<uint32_t>(font_tile_cache_[offset + 2]) << 16) |
-                          (static_cast<uint32_t>(font_tile_cache_[offset + 3]) << 24);
-                return true;
-            }
-        }
-        return false;
-    }
+    // Note: 0x090CBFB2 in ROM contains Sprite Frame Piece Descriptors (sprites_msg_frames_2.s),
+    // NOT font bitmap tiles. Intercepting or overwriting that range corrupts OAM piece shapes
+    // and sizes, rendering text as squashed horizontal strips. Never intercept ROM sprite descriptors.
 
     return false;
 }

@@ -646,17 +646,9 @@ static void test_font_resizer() {
     assert(fr.intercept_bus_read(FontResizer::kFontWidthTableBase + 65 * 2, 2, &val_micro));
     assert(val_micro <= val);
 
-    // Test bus read interception for ROM font sprite tiles
-    uint32_t tile_w0 = 0;
-    assert(fr.intercept_bus_read(FontResizer::kFontTilesBase + 65 * 128, 4, &tile_w0));
-    bool has_tile_pixels = false;
-    for (uint32_t off = 0; off < 128; off += 4) {
-        uint32_t tw = 0;
-        if (fr.intercept_bus_read(FontResizer::kFontTilesBase + 65 * 128 + off, 4, &tw)) {
-            if (tw != 0) has_tile_pixels = true;
-        }
-    }
-    assert(has_tile_pixels);
+    // ROM sprite frame piece descriptors at 0x090CBFB2 must NEVER be intercepted!
+    uint32_t frame_val = 0;
+    assert(!fr.intercept_bus_read(FontResizer::kFontTilesBase + 65 * 128, 4, &frame_val));
 
     // Restore default
     fr.set_font_style(FontStyle::Authentic);

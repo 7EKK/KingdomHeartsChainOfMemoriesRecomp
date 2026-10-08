@@ -22,7 +22,7 @@ enum class FontStyle : int {
 
 struct FontResizerSettings {
     FontScale scale = FontScale::Original100;
-    FontStyle style = FontStyle::CleanModern;
+    FontStyle style = FontStyle::Authentic;
     int line_spacing = 16;       // Vertical line pitch in pixels (8 to 20)
     int kerning_adjustment = 0;   // Kerning offset in pixels (-2 to +2)
     bool edge_smoothing = true;   // Anti-aliased font downsampling
