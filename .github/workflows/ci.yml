@@ -1,133 +1,72 @@
-name: Build KHCOMRecomp
+name: Build and package KHCOMRecomp Windows x64
 
 on:
-  push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-windows:
-    name: Windows x64 Build
+  windows:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Check out source and submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Set up Node.js 24 (LTS)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Set up MSVC Developer Command Prompt
+      - name: Initialize MSVC x64
         uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
           arch: x64
 
-      - name: Build Project
+      - name: Build Release
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass -File .\build.ps1 -Target KHCOMRecomp -Config Release
+          & .\build.ps1 -Target KHCOMRecomp -Config Release
+          if ($LASTEXITCODE -ne 0) { throw 'build.ps1 failed' }
+          if (-not (Test-Path -LiteralPath 'build\Release\KHCOMRecomp.exe')) {
+            throw 'Build did not produce build\Release\KHCOMRecomp.exe'
+          }
 
-      - name: Run Automated Test Suite
+      - name: Test
         shell: powershell
         run: |
-          python tests/test_runtime_functions.py
+          & python tests\test_runtime_functions.py
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime tests failed' }
 
-      - name: Stage Distribution Package
+      - name: Package Windows portable ZIP
         shell: powershell
         run: |
-          $dist = "KHCOMRecomp-Windows-x64"
+          $ErrorActionPreference = 'Stop'
+          $dist = 'KHCOMRecomp-Windows-x64'
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-          $exePath = if (Test-Path "build\Release\KHCOMRecomp.exe") { "build\Release\KHCOMRecomp.exe" } else { "KHCOMRecomp.exe" }
-          Copy-Item $exePath -Destination $dist
+          Copy-Item -LiteralPath 'build\Release\KHCOMRecomp.exe' -Destination $dist
+          $dllPaths = @(
+            'build\Release\SDL2.dll',
+            'third_party\sdl2\lib\x64\SDL2.dll',
+            'SDL2.dll'
+          )
+          $dll = $dllPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $dll) { throw 'SDL2.dll missing: checked build, third_party, and repository root' }
+          Copy-Item -LiteralPath $dll -Destination $dist
 
-          $sdlPath = if (Test-Path "build\Release\SDL2.dll") { "build\Release\SDL2.dll" } else { "SDL2.dll" }
-          Copy-Item $sdlPath -Destination $dist
+          foreach ($name in @('keybinds.ini', 'README.md', 'config', 'docs')) {
+            if (Test-Path -LiteralPath $name) {
+              Copy-Item -LiteralPath $name -Destination $dist -Recurse -Force
+            } else {
+              Write-Warning "Optional distribution item missing: $name"
+            }
+          }
+          Compress-Archive -LiteralPath $dist -DestinationPath "$dist.zip" -CompressionLevel Optimal -Force
+          if (-not (Test-Path -LiteralPath "$dist.zip")) { throw 'Distribution ZIP missing' }
 
-          Copy-Item "keybinds.ini" -Destination $dist
-          Copy-Item "README.md" -Destination $dist
-          Copy-Item -Recurse "config" -Destination (Join-Path $dist "config")
-          Copy-Item -Recurse "docs" -Destination (Join-Path $dist "docs")
-
-          tar -a -c -f "$dist.zip" $dist
-
-      - name: Upload Artifact
+      - name: Upload Windows x64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: KHCOMRecomp-Windows-x64
           path: KHCOMRecomp-Windows-x64.zip
+          if-no-files-found: error
           retention-days: 14
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: KHCOMRecomp-Windows-x64.zip
-          generate_release_notes: true
-
-  build-linux:
-    name: Linux x64 Build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Set up Node.js 24 (LTS)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev cmake ninja-build build-essential python3
-
-      - name: Build Project
-        run: |
-          chmod +x build.sh
-          ./build.sh -c Release
-
-      - name: Run Automated Test Suite
-        run: |
-          python3 tests/test_runtime_functions.py
-
-      - name: Stage Distribution Package
-        run: |
-          DIST="KHCOMRecomp-Linux-x64"
-          mkdir -p "$DIST"
-
-          EXE_PATH=$(if [ -f "build/KHCOMRecomp" ]; then echo "build/KHCOMRecomp"; else echo "KHCOMRecomp"; fi)
-          cp "$EXE_PATH" "$DIST/"
-          cp keybinds.ini README.md "$DIST/"
-          cp -r config docs "$DIST/"
-
-          tar -czvf "$DIST.tar.gz" "$DIST"
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KHCOMRecomp-Linux-x64
-          path: KHCOMRecomp-Linux-x64.tar.gz
-          retention-days: 14
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: KHCOMRecomp-Linux-x64.tar.gz
-          generate_release_notes: true
