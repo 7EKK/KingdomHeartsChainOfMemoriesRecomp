@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <SDL2/SDL.h>
+#include <SDL.h>
 
 /**
  * Adaptive Widescreen Architecture for Kingdom Hearts: Chain of Memories
