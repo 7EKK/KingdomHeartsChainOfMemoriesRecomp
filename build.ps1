@@ -85,7 +85,8 @@ if (-not (Test-Path -LiteralPath $sdlHeader)) {
     $tempDir = Join-Path $root "third_party\temp"
     New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
     $zipPath = Join-Path $tempDir "sdl2.zip"
-    curl.exe -L "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-devel-2.30.12-VC.zip" -o $zipPath
+    curl.exe -fSL "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-devel-2.30.12-VC.zip" -o $zipPath
+    if ($LASTEXITCODE -ne 0) { throw "SDL2 download failed with exit code $LASTEXITCODE" }
     Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
     Move-Item -Path (Join-Path $tempDir "SDL2-2.30.12") -Destination (Join-Path $root "third_party\sdl2") -Force
     Remove-Item -Recurse -Force $tempDir
@@ -95,6 +96,7 @@ $recompUiDir = Join-Path $root "external\recomp-ui"
 if (-not (Test-Path -LiteralPath (Join-Path $recompUiDir "CMakeLists.txt"))) {
     Write-Host "[KHCOMRecomp] Initializing recomp-ui submodule..."
     git submodule update --init --recursive external/recomp-ui
+    if ($LASTEXITCODE -ne 0) { throw "recomp-ui submodule initialization failed with exit code $LASTEXITCODE" }
 }
 
 Write-Host "[KHCOMRecomp] CMake: $cmakePath"
@@ -104,7 +106,9 @@ $buildDir = Join-Path $root "build"
 if ($BuildRecompiler) {
     Write-Host "[KHCOMRecomp] Building gba_recompile..."
     & $cmakePath -S $root -B $buildDir -G "Ninja Multi-Config"
+    if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed with exit code $LASTEXITCODE" }
     & $cmakePath --build $buildDir --config $Config --target gba_recompile --parallel
+    if ($LASTEXITCODE -ne 0) { throw "gba_recompile build failed with exit code $LASTEXITCODE" }
     Write-Host "[KHCOMRecomp] gba_recompile built at $buildDir\$Config\gba_recompile.exe"
     exit 0
 }
@@ -136,6 +140,7 @@ if ($Recompile) {
         --config (Join-Path $root "config\b8ce.toml") `
         --symbols (Join-Path $root "symbols\imported_symbols.tsv") `
         --out (Join-Path $root "generated")
+    if ($LASTEXITCODE -ne 0) { throw "Static recompilation failed with exit code $LASTEXITCODE" }
 
     Write-Host "[KHCOMRecomp] C++ code generated in generated/ directory."
     exit 0
@@ -143,9 +148,11 @@ if ($Recompile) {
 
 Write-Host "[KHCOMRecomp] Configuring CMake in $buildDir..."
 & $cmakePath -S $root -B $buildDir -G "Ninja Multi-Config"
+if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed with exit code $LASTEXITCODE" }
 
 Write-Host "[KHCOMRecomp] Compiling target '$Target' ($Config)..."
 & $cmakePath --build $buildDir --config $Config --target $Target --parallel
+if ($LASTEXITCODE -ne 0) { throw "Build of $Target failed with exit code $LASTEXITCODE" }
 
 $builtExe = Join-Path $buildDir "$Config\KHCOMRecomp.exe"
 if (Test-Path -LiteralPath $builtExe) {
