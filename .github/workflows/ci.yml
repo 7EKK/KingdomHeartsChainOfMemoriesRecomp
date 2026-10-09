@@ -2,6 +2,11 @@ name: Build and package KHCOMRecomp Windows x64
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - fix/windows-ci-sdl2-build
+  pull_request:
 
 permissions:
   contents: read
@@ -24,6 +29,7 @@ jobs:
       - name: Build Release
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           & .\build.ps1 -Target KHCOMRecomp -Config Release
           if ($LASTEXITCODE -ne 0) { throw 'build.ps1 failed' }
           if (-not (Test-Path -LiteralPath 'build\Release\KHCOMRecomp.exe')) {
